@@ -17,7 +17,20 @@ To czysty kod, bez konfiguracji modeli, promptów i danych.
 | `bin/oc-regula` | Pozwala modelowi dopisać krótką regułę do bloku `WYUCZONE` w `AGENTS.md` (limit 10 linii, z kopią). |
 | `bin/audyt-retencja` + `systemd/` | Co tydzień przenosi audyt starszy niż 30 dni do archiwum tar. Pliki kasuje dopiero po weryfikacji bajt w bajt. |
 
-Ścieżki zakładają `~/bin`, `~/.config/opencode/plugins/<nazwa>/index.ts` i MemPalace w `~/mempalace` (venv) z embeddingami bge-m3 na `127.0.0.1:8089`.
+## Instalacja
+
+```sh
+git clone https://github.com/SyriusM/opencode-config && cd opencode-config
+./install.sh          # pyta o MemPalace, port embeddingów i skrzydła; -y = domyślne
+./install.sh --check  # autotest
+./install.sh --uninstall
+```
+
+Wymagania: Python ≥ 3.10 i opencode 2.x (`npm i -g @opencode/cli`). Gdy MemPalace nie ma, instalator zakłada venv i pobiera go z PyPI. Pliki trafiają do `~/.config/opencode/plugins/` i `~/bin/`, a ustawienia do `~/.config/opencode-config/config`. Nadpisywane pliki dostają kopię `.bak-…`.
+
+Standardowe porty embeddingów: `0` (wbudowane w MemPalace, bez serwera; domyślnie), `8080` (llama.cpp), `11434` (Ollama).
+
+Przetestowane w czystym kontenerze Arch Linux (instalacja, autotest, start opencode z wtyczkami, deinstalacja).
 
 ## API wtyczek opencode 2.0.24 (zmierzone, nie z dokumentacji)
 

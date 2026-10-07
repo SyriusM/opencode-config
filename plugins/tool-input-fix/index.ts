@@ -1,4 +1,4 @@
-import { appendFileSync, mkdirSync, readdirSync, readFileSync, statSync } from "node:fs"
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync } from "node:fs"
 import { join } from "node:path"
 
 // TOOL-INPUT-FIX — poprawia typowe błędy wejścia lokalnych modeli ZANIM narzędzie ruszy
@@ -295,9 +295,9 @@ const WSK_SHELL: Wskazowka[] = [
   { nazwa: "sudo", re: /(^|[;&|]\s*)sudo\b/,
     tekst: 'sudo w narzędziach jest zablokowane. Przygotuj plik w katalogu domowym i podaj użytkownikowi JEDNĄ komendę do wykonania, np.: sudo cp ~/tmp-opencode/plik /etc/plik' },
   { nazwa: "zabijanie-uslug", re: /\b(pkill|killall)\b[^|;&>]*[\s'"](opencode|llama|brave|playwright)/,
-    tekst: 'Nie zabijaj opencode, modeli ani przeglądarki — to przerywa tę sesję albo pracę użytkownika. Sprawdź stan: pgrep -x llama-server; systemctl --user status llama-qwen36. Zatrzymanie albo restart zaproponuj użytkownikowi.' },
-  { nazwa: "apt", re: /\b(apt|apt-get)\s+(install|update|upgrade|remove)\b/,
-    tekst: 'To Arch (CachyOS), nie ma apt. Sprawdź pakiet: pacman -Ss NAZWA albo pacman -Qi NAZWA. Instalację (sudo pacman -S NAZWA) podaj użytkownikowi do wykonania.' },
+    tekst: 'Nie zabijaj opencode, modeli ani przeglądarki — to przerywa tę sesję albo pracę użytkownika. Sprawdź stan: pgrep -x llama-server; systemctl --user list-units "llama*". Zatrzymanie albo restart zaproponuj użytkownikowi.' },
+  ...(existsSync("/usr/bin/pacman") ? [  { nazwa: "apt", re: /\b(apt|apt-get)\s+(install|update|upgrade|remove)\b/,
+    tekst: 'To Arch (CachyOS), nie ma apt. Sprawdź pakiet: pacman -Ss NAZWA albo pacman -Qi NAZWA. Instalację (sudo pacman -S NAZWA) podaj użytkownikowi do wykonania.' }] : []),
   { nazwa: "zapis-do-systemu", re: />>?\s*\/(etc|usr|boot)\/|\btee\s+(-a\s+)?\/(etc|usr|boot)\/|\bsed\s+-i[^|;&]*\s\/(etc|usr|boot)\/|\b(cp|mv|install)\s[^|;&]*\s\/(etc|usr|boot)\/\S*\s*($|[;&|])/,
     tekst: 'Do /etc, /usr i /boot nie da się pisać bez roota. Zapisz plik w ~/tmp-opencode/, pokaż go i podaj użytkownikowi JEDNĄ komendę: sudo cp ~/tmp-opencode/plik /etc/plik' },
   { nazwa: "kbuildsycoca", re: /\bkbuildsyscaches?6?\b/,
