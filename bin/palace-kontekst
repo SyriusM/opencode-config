@@ -1,0 +1,81 @@
+#!/home/user/mempalace/.venv/bin/python
+"""Krótki kontekst z mempalace dla katalogu projektu — doklejany do promptu systemowego opencode
+przez wtyczkę palace-kontekst. Wypisuje gotowy tekst albo nic.
+
+Użycie: palace-kontekst <katalog> [--debug]
+- Embeddingi (llama-bge-m3 :8089) albo palace martwe → jedna linia ostrzeżenia zamiast pustki
+  (inaczej model myśli, że palace „nic nie wie”, a to brak danych, nie pomiar).
+- Katalog domowy / ogólne → tylko kontrola zdrowia, bez wyszukiwania (zapytanie bez treści = szum).
+"""
+import os
+import socket
+import sys
+from pathlib import Path
+
+PROG = 0.57          # minimalne podobieństwo (bge-m3); niżej to szum
+MAX_WYNIKOW = 3
+MAX_ZNAKOW = 350     # na jeden wynik
+# TYLKO skrzydła techniczne — bez dzienników, rozmów i spraw osobistych (model ma przeglądarkę i formularze)
+TECHNICZNE = {"projects", "ai-tools", "linux", "gaming", "sovereign-stack", "opencode", "wing_opencode",
+              "security-lab", "research"}
+debug = "--debug" in sys.argv
+args = [a for a in sys.argv[1:] if not a.startswith("--")]
+katalog = Path(args[0] if args else os.getcwd()).resolve()
+home = Path.home()
+
+
+def port_zyje(port: int) -> bool:
+    try:
+        with socket.create_connection(("127.0.0.1", port), timeout=1):
+            return True
+    except OSError:
+        return False
+
+
+if not port_zyje(8089):
+    print("PALACE: embeddingi (llama-bge-m3 :8089) nie odpowiadają — mempalace_search zwróci pusto albo błąd. "
+          "Pusty wynik ≠ brak wiedzy; powiedz użytkownikowi, że palace jest niedostępny.")
+    sys.exit(0)
+
+if katalog in (home, Path("/"), Path("/tmp")) or home not in katalog.parents:
+    sys.exit(0)
+
+sys.path.insert(0, str(home / "mempalace"))
+sys.stdout, _out = open(os.devnull, "w"), sys.stdout  # mempalace drukuje telemetrię
+try:
+    from mempalace import mcp_server as m
+    rel = str(katalog.relative_to(home))
+    zapytanie = f"{katalog.name} — projekt w ~/{rel}: stan, decyzje, problemy"
+    r = m.tool_search(zapytanie, limit=30)
+    wyniki = r.get("results", []) if isinstance(r, dict) else []
+except Exception as e:  # noqa: BLE001
+    sys.stdout = _out
+    print(f"PALACE: wyszukiwanie padło ({type(e).__name__}) — palace może być niedostępny.")
+    sys.exit(0)
+sys.stdout = _out
+
+def szum(w: dict) -> bool:
+    # entities.json pasuje do wszystkiego, surowe transkrypty (.jsonl) to rozmowa, nie fakty
+    zr = str(w.get("source_file", ""))
+    tekst = str(w.get("text", "")).strip()
+    if w.get("wing") not in TECHNICZNE or "diary" in str(w.get("room", "")):
+        return True
+    return (zr == "entities.json" or zr.endswith(".jsonl") or w.get("wing") == "_quarantine"
+            or len(tekst) < 80 or tekst.startswith("[tool:"))
+
+
+wybrane = [w for w in wyniki if w.get("similarity", 0) >= PROG and not szum(w)][:MAX_WYNIKOW]
+if debug:
+    for w in wyniki:
+        print(f"# {w.get('similarity')} {w.get('wing')}/{w.get('room')} {w.get('topic')}", file=sys.stderr)
+if not wybrane:
+    sys.exit(0)
+
+linie = [f"PALACE (tło z pamięci dla ~/{rel}; to notatki z przeszłości — stan sprawdzaj, zanim na nich oprzesz decyzję; "
+         "więcej: mempalace_search):"]
+for w in wybrane:
+    tekst = " ".join(str(w.get("text", "")).split())
+    if len(tekst) > MAX_ZNAKOW:
+        tekst = tekst[:MAX_ZNAKOW].rsplit(" ", 1)[0] + " …"
+    linie.append(f"- [{w.get('wing')}/{w.get('room')}] {tekst}")
+print("\n".join(linie))

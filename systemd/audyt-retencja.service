@@ -1,0 +1,7 @@
+[Unit]
+Description=Retencja ~/mempalace/audit (archiwum >30 dni, z weryfikacja)
+
+[Service]
+Type=oneshot
+ExecStart=%h/bin/audyt-retencja
+Nice=15

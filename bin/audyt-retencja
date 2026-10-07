@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# Retencja ~/mempalace/audit: pliki *.jsonl starsze niż 30 dni (także w podkatalogach kategorii)
+# → ~/mempalace/audit-archive/audit-<data>.tar.gz, weryfikacja bajt w bajt, dopiero potem kasowanie.
+# Przenoś, nie kasuj: bez udanej weryfikacji nic nie znika.
+set -euo pipefail
+AUDIT="$HOME/mempalace/audit"
+ARCH="$HOME/mempalace/audit-archive"
+DNI="${1:-30}"
+mkdir -p "$ARCH"
+mapfile -t PLIKI < <(cd "$AUDIT" && find . -type f -name '*.jsonl' -mtime +"$DNI" | sort)
+if [ "${#PLIKI[@]}" -eq 0 ]; then echo "audyt-retencja: nic starszego niż $DNI dni"; exit 0; fi
+TAR="$ARCH/audit-$(date +%Y%m%d-%H%M%S).tar.gz"
+tar -C "$AUDIT" -czf "$TAR" "${PLIKI[@]}"
+TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
+tar -C "$TMP" -xzf "$TAR"
+for f in "${PLIKI[@]}"; do
+  cmp -s "$AUDIT/$f" "$TMP/$f" || { echo "audyt-retencja: RÓŻNICA w $f — nic nie skasowano, archiwum $TAR zostaje"; exit 1; }
+done
+for f in "${PLIKI[@]}"; do rm -f "$AUDIT/$f"; done
+echo "audyt-retencja: ${#PLIKI[@]} plików → $TAR (zweryfikowane)"

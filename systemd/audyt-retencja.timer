@@ -1,0 +1,9 @@
+[Unit]
+Description=Cotygodniowa retencja audytu mempalace
+
+[Timer]
+OnCalendar=Mon 04:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

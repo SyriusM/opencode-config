@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+# Reguły wyuczone w AGENTS.md — jedyne miejsce, w którym model sam dopisuje reguły.
+# Blok między znacznikami <!-- WYUCZONE:START --> i <!-- WYUCZONE:END -->, najwyżej 10 linii, najstarsza wypada.
+#   oc-regula                 pokaż reguły (z numerami)
+#   oc-regula dodaj "TEKST"   dopisz regułę (jedna linia, do 200 znaków, z przykładem wywołania)
+#   oc-regula usun N          usuń regułę nr N
+# Przed każdą zmianą zapisuje kopię do ~/oc-audyt/auto-kopie (cofanie: ~/bin/oc-kopie).
+set -u
+PLIK="$HOME/.config/opencode/AGENTS.md"
+KOPIE="$HOME/oc-audyt/auto-kopie"
+MAX=10
+S='<!-- WYUCZONE:START -->'
+E='<!-- WYUCZONE:END -->'
+
+grep -qF "$S" "$PLIK" && grep -qF "$E" "$PLIK" || { echo "Brak znaczników bloku w $PLIK" >&2; exit 1; }
+
+reguly() { awk -v s="$S" -v e="$E" '$0==s{f=1;next} $0==e{f=0} f && /^- /' "$PLIK"; }
+
+zapisz() {  # stdin = nowe linie reguł
+  mkdir -p "$KOPIE"
+  cp -p "$PLIK" "$KOPIE/H__.config__opencode__AGENTS.md.$(date +%Y%m%d-%H%M%S)"
+  local nowe tmp
+  nowe=$(cat)
+  tmp=$(mktemp)
+  awk -v s="$S" -v e="$E" -v nowe="$nowe" '
+    $0==s { print; if (nowe != "") print nowe; f=1; next }
+    $0==e { f=0 }
+    !f { print }' "$PLIK" > "$tmp" && cat "$tmp" > "$PLIK"
+  rm -f "$tmp"
+}
+
+case "${1:-}" in
+  "")
+    n=$(reguly | wc -l)
+    echo "Reguły wyuczone: $n z $MAX"
+    reguly | nl -w2 -s'. '
+    ;;
+  dodaj)
+    t="${2:-}"
+    t=$(printf '%s' "$t" | tr '\n' ' ' | sed 's/  */ /g; s/^ //; s/ $//')
+    [ -n "$t" ] || { echo "Podaj tekst reguły w cudzysłowie." >&2; exit 1; }
+    [ "${#t}" -le 200 ] || { echo "Za długa (${#t} znaków, limit 200). Skróć: co robić + jeden przykład." >&2; exit 1; }
+    if reguly | grep -qF -- "$t"; then echo "Taka reguła już jest."; exit 0; fi
+    { reguly; echo "- $(date +%F) $t"; } | tail -n "$MAX" | zapisz
+    echo "Dopisano. $(reguly | wc -l) z $MAX reguł, plik $(wc -c < "$PLIK") bajtów. Cofnięcie: ~/bin/oc-kopie AGENTS"
+    ;;
+  usun)
+    n="${2:-}"
+    [[ "$n" =~ ^[0-9]+$ ]] || { echo "Podaj numer reguły (zobacz: oc-regula)." >&2; exit 1; }
+    [ "$n" -ge 1 ] && [ "$n" -le "$(reguly | wc -l)" ] || { echo "Nie ma reguły nr $n." >&2; exit 1; }
+    reguly | sed "${n}d" | zapisz
+    echo "Usunięto regułę nr $n."
+    ;;
+  *)
+    sed -n '2,7p' "$0" | sed 's/^# \{0,1\}//'
+    ;;
+esac
