@@ -18,10 +18,10 @@ MAX_ZNAKOW = 350     # na jeden wynik
 
 
 def konfig() -> dict:
-    """Opcjonalny ~/.config/opencode-config/config (KEY=VALUE, pisze go install.sh)."""
+    """Opcjonalny $XDG_CONFIG_HOME/opencode-config/config, domyślnie ~/.config (KEY=VALUE, pisze go install.sh)."""
     k = {}
     try:
-        for linia in (Path.home() / ".config" / "opencode-config" / "config").read_text().splitlines():
+        for linia in (Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "opencode-config" / "config").read_text().splitlines():
             if "=" in linia and not linia.lstrip().startswith("#"):
                 a, b = linia.split("=", 1)
                 k[a.strip()] = b.strip().strip('"')

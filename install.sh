@@ -13,8 +13,9 @@ set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BIN="$HOME/bin"
-PLUGINS="$HOME/.config/opencode/plugins"
-CONF_DIR="$HOME/.config/opencode-config"
+CFG="${XDG_CONFIG_HOME:-$HOME/.config}"   # opencode i systemd też czytają XDG_CONFIG_HOME
+PLUGINS="$CFG/opencode/plugins"
+CONF_DIR="$CFG/opencode-config"
 CONF="$CONF_DIR/config"
 LISTA="$CONF_DIR/zainstalowane.txt"
 VENV_DOMYSLNY="$HOME/.local/share/opencode-config/venv"
@@ -170,7 +171,7 @@ if command -v curl >/dev/null; then
 else
   uwaga "brak curl — pomijam wykrywanie serwera modeli"
 fi
-OC_JSON="$HOME/.config/opencode/opencode.json"
+OC_JSON="$CFG/opencode/opencode.json"
 OC_NOWY=""
 if [ -n "$LLM_URL" ] && [ -n "$LLM_MODEL" ]; then
   if [ -f "$OC_JSON" ]; then
@@ -213,7 +214,7 @@ case ":$PATH:" in *":$BIN:"*) ;; *) uwaga "~/bin nie jest w PATH — dopisz do p
 
 echo "5. Usługi systemd (--user)"
 if command -v systemctl >/dev/null && systemctl --user show-environment >/dev/null 2>&1; then
-  for f in "$REPO"/systemd/*; do instaluj "$f" "$HOME/.config/systemd/user/$(basename "$f")" 644; done
+  for f in "$REPO"/systemd/*; do instaluj "$f" "$CFG/systemd/user/$(basename "$f")" 644; done
   systemctl --user daemon-reload
   systemctl --user enable --now audyt-retencja.timer >/dev/null 2>&1 && ok "audyt-retencja.timer włączony"
 else

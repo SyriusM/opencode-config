@@ -9,6 +9,8 @@ if [ "${CI:-}" != true ] && [ ! -f /.dockerenv ] && [ ! -f /run/.containerenv ];
 fi
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 export HOME; HOME="$(mktemp -d)"
+# runnery GitHuba ustawiają XDG_CONFIG_HOME itd. — wszystko ma siedzieć w tymczasowym $HOME
+unset XDG_CONFIG_HOME XDG_DATA_HOME XDG_CACHE_HOME XDG_STATE_HOME
 export PATH="$HOME/bin:$PATH"
 BLEDY=0
 sprawdz() { # sprawdz "opis" polecenie…
