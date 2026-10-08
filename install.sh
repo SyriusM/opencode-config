@@ -197,6 +197,7 @@ for d in "$REPO"/plugins/*/; do
   n="$(basename "$d")"; instaluj "$d/index.ts" "$PLUGINS/$n/index.ts" 644; ok "wtyczka $n"
 done
 for f in "$REPO"/bin/*; do
+  [ -f "$f" ] || continue  # np. __pycache__ po sprawdzaniu składni
   n="$(basename "$f")"; tmp="$(mktemp)"
   # shebang Pythona → wybrany interpreter z MemPalace; /home/user → ten katalog domowy
   sed -e "1s|^#!/home/user/mempalace/.venv/bin/python|#!$PY|" -e "s|/home/user|$HOME|g" "$f" > "$tmp"

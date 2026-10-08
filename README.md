@@ -93,7 +93,7 @@ Przetestowane w czystym kontenerze Arch Linux z opencode 2.0.24: instalacja, aut
 Ten sam test uruchamia GitHub Actions przy każdym pushu (`.github/workflows/test.yml`: shellcheck, składnia wtyczek przez esbuild, `tests/e2e.sh`). Lokalnie tylko w kontenerze, bo test instaluje wszystko od zera:
 
 ```sh
-docker run --rm -v "$PWD":/repo:ro archlinux bash -c 'pacman -Syu --noconfirm nodejs npm python curl >/dev/null && npm i -g @opencode/cli@2.0.24 >/dev/null && cp -r /repo /tmp/oc && /tmp/oc/tests/e2e.sh'
+docker run --rm -v "$PWD":/repo:ro archlinux bash -c 'pacman -Syu --noconfirm --needed nodejs npm python curl diffutils >/dev/null && npm i -g --ignore-scripts=false @opencode/cli@2.0.24 >/dev/null && (cd "$(npm root -g)/@opencode/cli" && node postinstall.mjs) && cp -r /repo /tmp/oc && /tmp/oc/tests/e2e.sh'
 ```
 
 ## API wtyczek opencode 2.0.24 (zmierzone, nie z dokumentacji)
