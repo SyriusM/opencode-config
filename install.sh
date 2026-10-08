@@ -144,7 +144,9 @@ EOF
 ok "zapisano $CONF"
 
 echo "3b. Modele"
-if "$PY" -I -c "import mempalace.mcp_server" 2>/dev/null; then
+if [ "$PORT" != 0 ]; then
+  ok "embeddingi z serwera na :$PORT — pomijam pobieranie wbudowanego modelu"
+elif "$PY" -I -c "import mempalace.mcp_server" 2>/dev/null; then
   echo "  pobieranie modelu embeddingów MemPalace (jednorazowo, ~80 MB)…"
   if "$PY" -I -c "
 from mempalace import mcp_server as m
@@ -155,19 +157,19 @@ fi
 LLM_URL=""; LLM_MODEL=""
 if command -v curl >/dev/null; then
   if m="$(curl -s -m 3 http://127.0.0.1:8080/v1/models 2>/dev/null)" && [ -n "$m" ]; then
-    LLM_URL="http://127.0.0.1:8080/v1"
-    LLM_MODEL="$(printf '%s' "$m" | python3 -c 'import json,sys; d=json.load(sys.stdin); print((d.get("data") or [{}])[0].get("id",""))' 2>/dev/null)"
-    ok "llama.cpp na :8080 (model: ${LLM_MODEL:-?})"
-  elif t="$(curl -s -m 3 http://127.0.0.1:11434/api/tags 2>/dev/null)" && [ -n "$t" ]; then
+    LLM_MODEL="$(printf '%s' "$m" | python3 -c 'import json,sys; d=json.load(sys.stdin); print((d.get("data") or [{}])[0].get("id",""))' 2>/dev/null || true)"
+    if [ -n "$LLM_MODEL" ]; then LLM_URL="http://127.0.0.1:8080/v1"; ok "llama.cpp na :8080 (model: $LLM_MODEL)"
+    else uwaga ":8080 odpowiada, ale to nie serwer modeli (np. Open WebUI) — pomijam"; fi
+  fi
+  if [ -z "$LLM_URL" ] && t="$(curl -s -m 3 http://127.0.0.1:11434/api/tags 2>/dev/null)" && [ -n "$t" ]; then
     LLM_URL="http://127.0.0.1:11434/v1"
-    LLM_MODEL="$(printf '%s' "$t" | python3 -c 'import json,sys; d=json.load(sys.stdin); print((d.get("models") or [{}])[0].get("name",""))' 2>/dev/null)"
+    LLM_MODEL="$(printf '%s' "$t" | python3 -c 'import json,sys; d=json.load(sys.stdin); import re; m=[x.get("name","") for x in d.get("models") or [] if not re.search("embed|bge|minilm|e5-|rerank", x.get("name",""), re.I)]; print(m[0] if m else "")' 2>/dev/null || true)"
     if [ -z "$LLM_MODEL" ] && command -v ollama >/dev/null && tak_nie "Ollama nie ma modeli. Pobrać qwen3:8b (~5 GB, wywołuje narzędzia)?" n; then
       ollama pull qwen3:8b && LLM_MODEL="qwen3:8b"
     fi
     ok "Ollama na :11434 (model: ${LLM_MODEL:-brak})"
-  else
-    uwaga "nie wykryto lokalnego serwera modeli (llama.cpp :8080, Ollama :11434) — opencode potrzebuje dostawcy w opencode.json"
   fi
+  [ -n "$LLM_URL" ] || uwaga "nie wykryto lokalnego serwera modeli (llama.cpp :8080, Ollama :11434) — opencode potrzebuje dostawcy w opencode.json"
 else
   uwaga "brak curl — pomijam wykrywanie serwera modeli"
 fi
