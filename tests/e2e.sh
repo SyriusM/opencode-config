@@ -23,6 +23,8 @@ sleep 1
 echo "== instalacja"
 "$REPO/install.sh" -y | tail -3
 sprawdz "opencode.json wygenerowany dla atrapy" grep -q '"local/atrapa"' "$HOME/.config/opencode/opencode.json"
+sprawdz "opencode.json ma enabled_providers i small_model" grep -q '"small_model": "local/atrapa"' "$HOME/.config/opencode/opencode.json"
+sprawdz "freecode --sprawdz" freecode --sprawdz
 sprawdz "install.sh --check" bash -c "'$REPO/install.sh' --check | grep -q 'Autotest: OK'"
 
 echo "== notatka w palace dla katalogu sesji"
@@ -31,12 +33,12 @@ PY="$(head -1 "$HOME/bin/palace-kontekst" | sed 's/^#!//')"
 from mempalace import mcp_server as m
 m.tool_add_drawer(wing='projects', room='decisions', content='demo — projekt w ~/demo, ZNACZNIK-PALACE. DECYZJA: pliki tekstowe zawsze w UTF-8, wyniki zaokrąglamy do 2 miejsc.')" >/dev/null 2>&1
 
-echo "== sesja opencode run (2× błąd read, potem odpowiedź)"
+echo "== sesja freecode run (2× błąd read, potem odpowiedź)"
 mkdir -p "$HOME/demo" && cd "$HOME/demo" || exit 1
-timeout 120 opencode run "przeczytaj plik nie-istnieje.txt" > /tmp/oc-run.out 2>&1; KOD=$?
+FREECODE_TAK=1 timeout 120 freecode run "przeczytaj plik nie-istnieje.txt" > /tmp/oc-run.out 2>&1; KOD=$?
 cd "$REPO" || exit 1
 L="$HOME/.mempalace/hook_state"
-sprawdz "opencode run kod 0" test "$KOD" = 0
+sprawdz "freecode run kod 0" test "$KOD" = 0
 sprawdz "odpowiedź atrapy dotarła" grep -q "Koniec." /tmp/oc-run.out
 sprawdz "tool-input-fix załadowany" grep -q "\] loaded" "$L/tool_input_fix.log"
 sprawdz "auto-kopie załadowany" grep -q "auto-kopie loaded" "$L/tool_input_fix.log"
@@ -45,8 +47,15 @@ sprawdz "lesson-draft zapisał szkic" grep -q "wzorzec błędu" "$HOME/tmp-openc
 sprawdz "palace-kontekst dokleił notatkę" grep -q "doklejono" "$L/palace_kontekst.log"
 sprawdz "notatka dotarła do modelu" grep -q '"palace": true' /tmp/atrapa.log
 
+echo "== freecode odmawia przy uszkodzonym configu"
+cp "$HOME/.config/opencode/opencode.json" /tmp/oc-ok.json
+echo '{"model":' > "$HOME/.config/opencode/opencode.json"
+sprawdz "freecode run odmawia" bash -c '! FREECODE_TAK=1 freecode run x'
+cp /tmp/oc-ok.json "$HOME/.config/opencode/opencode.json"
+
 echo "== deinstalacja"
 "$REPO/install.sh" --uninstall >/dev/null
+sprawdz "freecode usunięty" test ! -e "$HOME/bin/freecode"
 sprawdz "wtyczki usunięte" test ! -e "$HOME/.config/opencode/plugins/lesson-draft/index.ts"
 sprawdz "opencode.json usunięty" test ! -e "$HOME/.config/opencode/opencode.json"
 

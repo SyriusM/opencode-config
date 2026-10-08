@@ -15,6 +15,7 @@ To czysty kod, bez konfiguracji modeli, promptów i danych.
 | `plugins/auto-kopie` | Przed każdą zmianą plików konfiguracji robi kopię zapasową (cofanie: `bin/oc-kopie`). |
 | `bin/oc-wniosek` | Kopalnia wniosków: `OBJAW / PRZYCZYNA / NAPRAWA / PRZYKŁAD` w plikach i w **osobnym** palace (`~/.mempalace-opencode`). Wnioski modeli nie mieszają się z pamięcią osobistą. Format: `kopalnia/PRZYKLAD.md`. |
 | `bin/oc-regula` | Pozwala modelowi dopisać krótką regułę do bloku `WYUCZONE` w `AGENTS.md` (limit 10 linii, z kopią). |
+| `freecode/freecode` | opencode tylko na lokalnych modelach: konfigurator przy pierwszym starcie, kontrola konfiguracji przed każdym startem (opis niżej). |
 | `bin/audyt-retencja` + `systemd/` | Co tydzień przenosi audyt starszy niż 30 dni do archiwum tar. Pliki kasuje dopiero po weryfikacji bajt w bajt. |
 
 ## Instalacja
@@ -31,11 +32,38 @@ git clone https://github.com/SyriusM/opencode-config && cd opencode-config
 Co robi instalator:
 
 1. Szuka MemPalace (`$MEMPALACE_PYTHON`, `~/mempalace/.venv`, potem systemowy `python3`). Jeśli go nie ma, proponuje venv w `~/.local/share/opencode-config/venv` i instalację z PyPI. Pyta o port serwera embeddingów do kontroli zdrowia: `0` = wbudowane w MemPalace, bez serwera (domyślnie), `8080` = llama.cpp, `11434` = Ollama.
-2. Szuka serwera modeli na `127.0.0.1:8080` (llama.cpp) i `127.0.0.1:11434` (Ollama). Jeśli znajdzie, a nie masz jeszcze `~/.config/opencode/opencode.json`, proponuje jego zapis z pierwszym modelem z listy. Istniejącego pliku nie rusza.
+2. Szuka serwera modeli na `127.0.0.1:8080` (llama.cpp) i `127.0.0.1:11434` (Ollama). Jeśli znajdzie, a nie masz jeszcze `~/.config/opencode/opencode.json`, proponuje jego zapis z pierwszym modelem z listy (z `enabled_providers` i lokalnym `small_model`). Istniejącego pliku nie rusza.
 3. Kopiuje wtyczki do `~/.config/opencode/plugins/` (opencode wczytuje je stamtąd sam, nie trzeba ich wpisywać do `opencode.json`), skrypty do `~/bin/`, a ustawienia zapisuje w `~/.config/opencode-config/config`. Nadpisywane pliki dostają kopię `.bak-…`.
 4. Włącza timer `audyt-retencja` (systemd `--user`, jeśli jest) i uruchamia autotest.
 
 `~/bin` powinien być w `PATH`, bo model wywołuje `oc-wniosek` i `oc-regula` przez powłokę. Instalator ostrzega, jeśli nie jest.
+
+## freecode: opencode tylko na lokalnych modelach
+
+opencode 2.x bez poprawnej konfiguracji po cichu wysyła rozmowę do darmowych modeli w chmurze. Sprawdzone w kontenerze z 2.0.24:
+
+| Sytuacja | Dokąd idzie prompt |
+|---|---|
+| brak `opencode.json` | chmura (`opencode/fledge-alpha-free`) |
+| uszkodzony JSON | chmura (`exo-free`), bez komunikatu o błędzie |
+| `enabled_providers` bez `small_model` | rozmowa lokalnie, **tytuły sesji do chmury** |
+| `enabled_providers` + lokalny `small_model` | wszystko lokalnie |
+
+Do tego usługa w tle (`opencode serve --service`) trzyma konfigurację z chwili swojego startu, więc poprawka pliku nie działa od razu.
+
+`freecode` to nakładka na niezmieniony opencode:
+
+- **przy pierwszym starcie** odpala konfigurator. Ten wykrywa lokalny serwer (llama.cpp :8080, Ollama :11434, LM Studio :1234, vLLM :8000) i zapisuje bezpieczny `opencode.json`. Do istniejącego pliku proponuje dopisać `enabled_providers` i `small_model`, z kopią zapasową. Ponowne uruchomienie: `freecode --konfiguruj`;
+- **przy każdym starcie** sprawdza wszystkie źródła konfiguracji: globalne, `$OPENCODE_CONFIG`, `$OPENCODE_CONFIG_CONTENT` i pliki projektu aż do korzenia repozytorium. Odmawia startu, jeśli JSON jest uszkodzony albo którykolwiek model czy dostawca nie jest lokalny (localhost, 127.0.0.0/8, ::1, hosty z `FREECODE_HOSTY`);
+- uruchamia opencode z `--standalone`, czyli z własnym serwerem z właśnie sprawdzoną konfiguracją, oraz z `OPENCODE_DISABLE_AUTOUPDATE` i `OPENCODE_DISABLE_MODELS_FETCH`.
+
+```sh
+freecode                 # TUI
+freecode run "pytanie"   # jednorazowo
+freecode --sprawdz       # tylko kontrola
+```
+
+Ograniczenie: freecode nie blokuje sieci. Narzędzia `webfetch`/`websearch` i serwery MCP nadal mogą łączyć się z internetem, a pilnowana jest tylko wysyłka promptów do modeli.
 
 ## Model: przykładowy `opencode.json`
 
@@ -44,7 +72,9 @@ Gdy instalator nie wykrył serwera albo masz model na innym porcie, zapisz `~/.c
 ```json
 {
   "$schema": "https://opencode.ai/config.json",
+  "enabled_providers": ["local"],
   "model": "local/qwen3-8b",
+  "small_model": "local/qwen3-8b",
   "provider": {
     "local": {
       "npm": "@ai-sdk/openai-compatible",
@@ -55,7 +85,7 @@ Gdy instalator nie wykrył serwera albo masz model na innym porcie, zapisz `~/.c
 }
 ```
 
-Nazwa modelu (`qwen3-8b`) musi się zgadzać z tym, co serwer zwraca pod `/v1/models`. Model musi umieć wywoływać narzędzia. Dla llama.cpp oznacza to uruchomienie `llama-server` z `--jinja`.
+`enabled_providers` i `small_model` są obowiązkowe, bo bez nich opencode korzysta z chmury (patrz freecode). Nazwa modelu (`qwen3-8b`) musi się zgadzać z tym, co serwer zwraca pod `/v1/models`. Model musi umieć wywoływać narzędzia. Dla llama.cpp oznacza to uruchomienie `llama-server` z `--jinja`.
 
 ## `AGENTS.md` (opcjonalnie)
 

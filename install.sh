@@ -177,8 +177,9 @@ if [ -n "$LLM_URL" ] && [ -n "$LLM_MODEL" ]; then
     uwaga "$OC_JSON istnieje — nie ruszam. Dostawca do dopisania: \"local\": {\"npm\": \"@ai-sdk/openai-compatible\", \"options\": {\"baseURL\": \"$LLM_URL\"}, \"models\": {\"$LLM_MODEL\": {}}}"
   elif tak_nie "Zapisać $OC_JSON z tym modelem jako domyślnym?" t; then
     mkdir -p "$(dirname "$OC_JSON")"
-    printf '{\n  "$schema": "https://opencode.ai/config.json",\n  "model": "local/%s",\n  "provider": {\n    "local": {\n      "npm": "@ai-sdk/openai-compatible",\n      "options": { "baseURL": "%s" },\n      "models": { "%s": { "name": "%s (lokalnie)" } }\n    }\n  }\n}\n' \
-      "$LLM_MODEL" "$LLM_URL" "$LLM_MODEL" "$LLM_MODEL" > "$OC_JSON"
+    # enabled_providers + small_model: bez nich opencode wysyła m.in. tytuły sesji do modeli w chmurze
+    printf '{\n  "$schema": "https://opencode.ai/config.json",\n  "enabled_providers": ["local"],\n  "model": "local/%s",\n  "small_model": "local/%s",\n  "share": "disabled",\n  "provider": {\n    "local": {\n      "npm": "@ai-sdk/openai-compatible",\n      "options": { "baseURL": "%s" },\n      "models": { "%s": { "name": "%s (lokalnie)" } }\n    }\n  }\n}\n' \
+      "$LLM_MODEL" "$LLM_MODEL" "$LLM_URL" "$LLM_MODEL" "$LLM_MODEL" > "$OC_JSON"
     OC_NOWY="$OC_JSON"; ok "zapisano $OC_JSON"
   fi
 fi
@@ -203,6 +204,7 @@ for f in "$REPO"/bin/*; do
   sed -e "1s|^#!/home/user/mempalace/.venv/bin/python|#!$PY|" -e "s|/home/user|$HOME|g" "$f" > "$tmp"
   instaluj "$tmp" "$BIN/$n" 755; rm -f "$tmp"; ok "~/bin/$n"
 done
+instaluj "$REPO/freecode/freecode" "$BIN/freecode" 755; ok "~/bin/freecode (opencode tylko na lokalnych modelach)"
 mkdir -p "$HOME/oc-audyt/kopalnia" "$HOME/oc-audyt/auto-kopie" "$HOME/tmp-opencode" "$HOME/mempalace/audit"
 if [ -z "$(ls -A "$HOME/oc-audyt/kopalnia" 2>/dev/null)" ]; then
   cp "$REPO/kopalnia/PRZYKLAD.md" "$HOME/oc-audyt/kopalnia/" && ok "przykładowy wniosek w ~/oc-audyt/kopalnia"
