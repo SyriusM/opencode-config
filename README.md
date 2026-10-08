@@ -90,6 +90,12 @@ Deinstalacja usuwa tylko zainstalowane pliki. Dane z tabeli, ustawienia i venv z
 
 Przetestowane w czystym kontenerze Arch Linux z opencode 2.0.24: instalacja, autotest, deinstalacja oraz pełna sesja `opencode run` na atrapie serwera OpenAI. W tej sesji wszystkie wtyczki się ładują, `error-hook` i `lesson-draft` zapisują błędy narzędzia, a `palace-kontekst` dokleja notatkę do promptu systemowego.
 
+Ten sam test uruchamia GitHub Actions przy każdym pushu (`.github/workflows/test.yml`: shellcheck, składnia wtyczek przez esbuild, `tests/e2e.sh`). Lokalnie tylko w kontenerze, bo test instaluje wszystko od zera:
+
+```sh
+docker run --rm -v "$PWD":/repo:ro archlinux bash -c 'pacman -Syu --noconfirm nodejs npm python curl >/dev/null && npm i -g @opencode/cli@2.0.24 >/dev/null && cp -r /repo /tmp/oc && /tmp/oc/tests/e2e.sh'
+```
+
 ## API wtyczek opencode 2.0.24 (zmierzone, nie z dokumentacji)
 
 - Moduł: `export default { id, async setup(ctx) { … } }`. Wtyczka dostaje osobną instancję dla każdej lokalizacji, a strumień zdarzeń jest wspólny, więc trzeba deduplikować po `event.id`.

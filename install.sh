@@ -7,6 +7,8 @@
 #   ./install.sh --uninstall
 #
 # Istniejące pliki nadpisywane przez instalator dostają kopię *.bak-RRRRMMDD-GGMMSS.
+# `~` i „cudzysłowy” w komunikatach są celowe (tekst dla człowieka, nie ścieżki ani składnia)
+# shellcheck disable=SC2088,SC1111
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -215,6 +217,6 @@ else
   uwaga "brak systemd --user — retencję audytu uruchamiaj ręcznie: ~/bin/audyt-retencja"
 fi
 
-sort -u "$LISTA.nowa" $( [ -f "$LISTA" ] && echo "$LISTA" ) > "$LISTA.tmp" && mv "$LISTA.tmp" "$LISTA" && rm -f "$LISTA.nowa"
+{ cat "$LISTA.nowa"; [ -f "$LISTA" ] && cat "$LISTA"; true; } | sort -u > "$LISTA.tmp" && mv "$LISTA.tmp" "$LISTA" && rm -f "$LISTA.nowa"
 echo "6. Gotowe — wtyczki wczytają się przy następnym starcie opencode."
 autotest || true

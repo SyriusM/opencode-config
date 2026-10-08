@@ -30,6 +30,7 @@ const ERROR_PATTERNS = [
   /\b404\b/,
   /not found/i,
   /no such file/i,
+  /invalid arguments/i, // zły klucz/typ argumentu (np. filePath zamiast path) — częste u lokalnych modeli
 ]
 
 function log(line: string) {
