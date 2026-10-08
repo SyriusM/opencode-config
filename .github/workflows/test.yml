@@ -25,7 +25,7 @@ jobs:
         run: for f in plugins/*/index.ts; do npx -y esbuild "$f" --log-level=error --outfile=/dev/null || exit 1; done
 
       - name: składnia skryptów Pythona
-        run: for f in bin/oc-wniosek bin/palace-kontekst freecode/freecode tests/atrapa.py; do python3 -c "import ast, sys; ast.parse(open(sys.argv[1]).read())" "$f" || exit 1; done
+        run: for f in bin/oc-wniosek bin/palace-kontekst freecode/freecode freecode/przemianuj tests/atrapa.py; do python3 -c "import ast, sys; ast.parse(open(sys.argv[1]).read())" "$f" || exit 1; done
 
       - name: opencode 2.0.24
         run: npm i -g @opencode/cli@2.0.24 && opencode --version

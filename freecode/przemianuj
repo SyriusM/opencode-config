@@ -1,0 +1,180 @@
+#!/usr/bin/env python3
+"""przemianuj — kopia źródeł opencode z nazwą freecode; czego nie można zmienić, trafia do logu.
+
+  przemianuj ZRODLO CEL      ZRODLO = checkout git opencode (np. tag v2.0.24), CEL = nowy katalog
+
+Zamienia w treści i w ścieżkach (warianty mają tę samą długość, nic się nie przesuwa):
+  opencode→freecode  OpenCode→FreeCode  OPENCODE→FREECODE  Opencode→Freecode  openCode→freeCode
+
+NIE zmienia (każde wystąpienie w logu z plikiem i linią):
+  LICENCJA   pliki licencji — MIT wymaga zachowania informacji o prawach autorskich
+  DOMENA     adresy z nazwą w domenie (opencode.ai…) — zmiana wskazywałaby cudzą/nieistniejącą domenę
+  REPO       adresy repozytoriów źródłowych (github.com/anomalyco/opencode)
+  PACZKA     paczki npm spoza repozytorium (@opencode-ai/sdk…) — instalują się z rejestru pod tą nazwą
+  BINARNY    pliki binarne zawierające nazwę (obrazy, fonty)
+  LOGO       pliki z „logo” w ścieżce — grafika do ręcznej zmiany (nazwa w obrazie to nie tekst)
+Dodatkowo SIEC: każdy adres http(s)/ws(s) w kodzie (bez testów i dokumentacji) — mapa połączeń wychodzących.
+
+Wynik: CEL/ (tylko pliki śledzone przez git) + CEL.log.tsv (kategoria, plik, linia, fragment) + CEL.podsumowanie.md
+"""
+import collections
+import json
+import os
+import re
+import subprocess
+import sys
+
+ZAMIANY = [("opencode", "freecode"), ("OpenCode", "FreeCode"), ("OPENCODE", "FREECODE"),
+           ("Opencode", "Freecode"), ("openCode", "freeCode")]
+WZOR = re.compile("|".join(re.escape(a) for a, _ in ZAMIANY))
+MAPA = dict(ZAMIANY)
+NAZWA = re.compile("opencode", re.I)
+DOMENA = re.compile(r"(?:[a-z0-9-]+\.)*[a-z0-9-]*opencode[a-z0-9-]*\.(?:ai|com|dev|io|net|org|app|sh)\b", re.I)
+REPO = re.compile(r"github\.com[/:][A-Za-z0-9_.-]+/opencode(?:-[A-Za-z0-9_-]+)?(?:\.git)?", re.I)
+URL = re.compile(r"\b(?:https?|wss?)://[^\s\"'`<>)\]}]+")
+LICENCJA = re.compile(r"(^|/)(LICEN[CS]E|COPYING|NOTICE)(\.[a-z]+)?$", re.I)
+NIE_KOD = re.compile(r"(^|/)(test|tests|__tests__|fixtures?|docs?|specs?|examples?|storybook)(/|$)|\.(md|mdx|snap|test\.\w+|spec\.\w+)$", re.I)
+
+
+def zamien(t):
+    return WZOR.sub(lambda m: MAPA[m.group(0)], t)
+
+
+def pliki_git(zrodlo):
+    r = subprocess.run(["git", "-C", zrodlo, "ls-files", "-z"], capture_output=True, check=True)
+    return [p for p in r.stdout.decode("utf-8").split("\0") if p]
+
+
+def paczki_zewnetrzne(zrodlo, pliki):
+    """Nazwy paczek z „opencode”, od których coś zależy, a których nie ma w repozytorium."""
+    swoje, zalezne = set(), set()
+    for p in pliki:
+        if not p.endswith("package.json"):
+            continue
+        try:
+            d = json.load(open(os.path.join(zrodlo, p), encoding="utf-8"))
+        except (ValueError, OSError):
+            continue
+        if isinstance(d.get("name"), str):
+            swoje.add(d["name"])
+        for k in ("dependencies", "devDependencies", "peerDependencies", "optionalDependencies"):
+            zalezne.update((d.get(k) or {}).keys())
+    return sorted((n for n in zalezne - swoje if NAZWA.search(n)), key=len, reverse=True)
+
+
+def main(argv):
+    if len(argv) != 2 or argv[0] in ("-h", "--help"):
+        print(__doc__.strip()); return 2
+    zrodlo, cel = (os.path.abspath(a) for a in argv)
+    if os.path.exists(cel):
+        print(f"{cel} już istnieje — podaj nowy katalog", file=sys.stderr); return 1
+    pliki = pliki_git(zrodlo)
+    zewn = paczki_zewnetrzne(zrodlo, pliki)
+    chron = [("REPO", REPO), ("DOMENA", DOMENA)]
+    if zewn:
+        chron.insert(0, ("PACZKA", re.compile("|".join(re.escape(n) for n in zewn))))
+
+    log, licz = [], collections.Counter()
+    zmienione_pliki = zmienione_sciezki = 0
+
+    def zapisz_log(kat, plik, linia, frag):
+        log.append((kat, plik, linia, frag.replace("\t", " ").strip()[:200]))
+        licz[kat] += 1
+
+    for p in pliki:
+        src = os.path.join(zrodlo, p)
+        if os.path.islink(src) or not os.path.isfile(src):
+            continue
+        nowa = zamien(p)
+        if nowa != p:
+            zmienione_sciezki += 1
+        dst = os.path.join(cel, nowa)
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        dane = open(src, "rb").read()
+        if re.search(r"logo", p, re.I):
+            zapisz_log("LOGO", nowa, 0, "grafika/znak — sprawdź i przerysuj ręcznie")
+        try:
+            tekst = dane.decode("utf-8")
+        except UnicodeDecodeError:
+            if NAZWA.search(dane.decode("latin-1")):
+                zapisz_log("BINARNY", nowa, 0, f"{len(NAZWA.findall(dane.decode('latin-1')))}× nazwa w pliku binarnym")
+            open(dst, "wb").write(dane)
+            os.chmod(dst, os.stat(src).st_mode & 0o777)
+            continue
+
+        if LICENCJA.search(p):
+            for i, l in enumerate(tekst.splitlines(), 1):
+                if NAZWA.search(l):
+                    zapisz_log("LICENCJA", nowa, i, l)
+            nowy = tekst
+        else:
+            linie = tekst.split("\n")
+            for i, l in enumerate(linie):
+                if not NAZWA.search(l) and not ("://" in l and not NIE_KOD.search(p)):
+                    continue
+                if not NIE_KOD.search(p):
+                    for u in URL.findall(l):
+                        zapisz_log("SIEC", nowa, i + 1, u)
+                if not NAZWA.search(l):
+                    continue
+                # chronione fragmenty → znaczniki, zamiana reszty, przywrócenie
+                schowek = []
+
+                def schowaj(m, kat):
+                    zapisz_log(kat, nowa, i + 1, m.group(0))
+                    schowek.append(m.group(0))
+                    return f"\0{len(schowek) - 1}\0"
+
+                for kat, rx in chron:
+                    l = rx.sub(lambda m, k=kat: schowaj(m, k), l)
+                l = zamien(l)
+                l = re.sub(r"\0(\d+)\0", lambda m: schowek[int(m.group(1))], l)
+                linie[i] = l
+            nowy = "\n".join(linie)
+        if nowy != tekst:
+            zmienione_pliki += 1
+        open(dst, "w", encoding="utf-8", newline="").write(nowy)
+        os.chmod(dst, os.stat(src).st_mode & 0o777)
+
+    # kontrola: każde pozostałe wystąpienie nazwy musi być w logu
+    zostalo = collections.Counter()
+    for kat, plik, linia, frag in log:
+        if kat != "SIEC" and kat != "LOGO":
+            zostalo[plik] += len(NAZWA.findall(frag)) if kat != "BINARNY" else 0
+    nieopisane = []
+    for root, _, fs in os.walk(cel):
+        for f in fs:
+            pth = os.path.join(root, f); rel = os.path.relpath(pth, cel)
+            try:
+                t = open(pth, encoding="utf-8").read()
+            except (UnicodeDecodeError, OSError):
+                continue
+            n = len(NAZWA.findall(t))
+            if n > zostalo.get(rel, 0):
+                nieopisane.append((rel, n - zostalo.get(rel, 0)))
+            if NAZWA.search(rel):
+                nieopisane.append((rel, "nazwa w ścieżce"))
+    for rel, n in nieopisane:
+        zapisz_log("NIEOPISANE", rel, 0, f"{n} wystąpień poza logiem — błąd przemianuj")
+
+    with open(cel + ".log.tsv", "w", encoding="utf-8") as f:
+        f.write("kategoria\tplik\tlinia\tfragment\n")
+        for w in sorted(log):
+            f.write("\t".join(map(str, w)) + "\n")
+    hosty = collections.Counter(re.sub(r"^\w+://([^/:?#]+).*", r"\1", u) for k, _, _, u in log if k == "SIEC")
+    with open(cel + ".podsumowanie.md", "w", encoding="utf-8") as f:
+        f.write(f"# przemianuj: {zrodlo} → {cel}\n\n")
+        f.write(f"- plików: {len(pliki)}, zmienionych treści: {zmienione_pliki}, zmienionych ścieżek: {zmienione_sciezki}\n")
+        f.write(f"- paczki zewnętrzne (nietknięte): {', '.join(zewn) or 'brak'}\n\n## Niezmienione (szczegóły w {os.path.basename(cel)}.log.tsv)\n\n")
+        for kat in ("LICENCJA", "DOMENA", "REPO", "PACZKA", "BINARNY", "LOGO", "NIEOPISANE"):
+            f.write(f"- {kat}: {licz.get(kat, 0)}\n")
+        f.write(f"\n## Adresy sieciowe w kodzie (SIEC: {licz.get('SIEC', 0)} wystąpień, {len(hosty)} hostów)\n\n")
+        for h, n in hosty.most_common():
+            f.write(f"- {h} ({n})\n")
+    print(open(cel + ".podsumowanie.md", encoding="utf-8").read().split("## Adresy")[0].strip())
+    print(f"hostów w kodzie: {len(hosty)} (lista: {cel}.podsumowanie.md)")
+    return 1 if nieopisane else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
