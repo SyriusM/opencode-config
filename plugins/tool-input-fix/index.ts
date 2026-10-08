@@ -1,4 +1,5 @@
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync } from "node:fs"
+import { homedir } from "node:os"
 import { join } from "node:path"
 
 // TOOL-INPUT-FIX — poprawia typowe błędy wejścia lokalnych modeli ZANIM narzędzie ruszy
@@ -16,7 +17,7 @@ import { join } from "node:path"
 // Hook V2: ctx.tool.hook("execute.before"), zmiana przez `event.input = …` (tak robi wbudowany
 // plugin opencode 2.0.24). Nigdy nie rzucamy z hooka. Log: ~/.mempalace/hook_state/tool_input_fix.log
 
-const HOME = process.env.HOME ?? "/home/user"
+const HOME = homedir()
 const LOG = join(HOME, ".mempalace", "hook_state", "tool_input_fix.log")
 const MAX_REPEAT = 2
 

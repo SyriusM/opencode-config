@@ -1,4 +1,5 @@
 import { appendFileSync, mkdirSync } from "node:fs"
+import { homedir } from "node:os"
 import { join } from "node:path"
 import { execFile } from "node:child_process"
 
@@ -10,7 +11,7 @@ import { execFile } from "node:child_process"
 // (`i.system.push({type:"text", text})`). Tekst stały w obrębie katalogu → nie psuje cache promptu.
 // Nigdy nie rzucamy z hooka. Log: ~/.mempalace/hook_state/palace_kontekst.log
 
-const HOME = process.env.HOME ?? "/home/user"
+const HOME = homedir()
 const LOG = join(HOME, ".mempalace", "hook_state", "palace_kontekst.log")
 const SKRYPT = join(HOME, "bin", "palace-kontekst")
 const WAZNOSC_MS = 10 * 60_000

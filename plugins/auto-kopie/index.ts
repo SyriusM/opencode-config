@@ -1,4 +1,5 @@
 import { appendFileSync, copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, unlinkSync } from "node:fs"
+import { homedir } from "node:os"
 import { join } from "node:path"
 
 // AUTO-KOPIE — siatka bezpieczeństwa: przed każdą zmianą pliku konfiguracji opencode, skilla, usługi albo skryptu
@@ -8,7 +9,7 @@ import { join } from "node:path"
 // Hook V2: ctx.tool.hook("execute.before"). Nigdy nie blokuje narzędzia i nigdy nie rzuca.
 // Log: ~/.mempalace/hook_state/tool_input_fix.log (wpisy KOPIA). Cofanie: ~/bin/oc-kopie.
 
-const HOME = process.env.HOME ?? "/home/user"
+const HOME = homedir()
 const LOG = join(HOME, ".mempalace", "hook_state", "tool_input_fix.log")
 
 function log(line: string) {

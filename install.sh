@@ -126,6 +126,11 @@ else
 fi
 
 echo "3. Ustawienia"
+# ponowna instalacja: domyślne wartości z istniejących ustawień (zmienne środowiska mają pierwszeństwo)
+if [ -f "$CONF" ]; then
+  : "${PALACE_EMBED_PORT:=$(sed -n 's/^PALACE_EMBED_PORT=//p' "$CONF")}"
+  : "${PALACE_WINGS:=$(sed -n 's/^PALACE_WINGS=//p' "$CONF")}"
+fi
 echo "  Embeddingi MemPalace (standardowe porty):"
 echo "    0     — wbudowane w MemPalace, bez serwera (domyślnie)"
 echo "    8080  — llama.cpp llama-server (domyślny port)"

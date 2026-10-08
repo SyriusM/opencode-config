@@ -1,4 +1,5 @@
 import { appendFileSync, mkdirSync } from "node:fs"
+import { homedir } from "node:os"
 import { join } from "node:path"
 import { spawn } from "node:child_process"
 
@@ -10,7 +11,7 @@ import { spawn } from "node:child_process"
 // Wzorowany na plugins/notify/index.ts (defensive try/catch, zero throw,
 // zero wpływu na kontekst/tokeny sesji).
 
-const HOME = process.env.HOME ?? "/home/user"
+const HOME = homedir()
 const STATE_DIR = join(HOME, ".mempalace", "hook_state")
 const DEBUG_LOG = join(STATE_DIR, "lesson_draft.log")
 const DRAFT_FILE = join(HOME, "tmp-opencode", "lessons-draft.md")

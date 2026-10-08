@@ -1,4 +1,5 @@
 import { appendFileSync, mkdirSync } from "node:fs"
+import { homedir } from "node:os"
 import { join } from "node:path"
 import { execFile } from "node:child_process"
 
@@ -29,7 +30,7 @@ import { execFile } from "node:child_process"
 //   * Tylko status === "error"; sukcesy pomijamy (to jest ERROR hook).
 //   * Wejście toola ucinamy do 4 KB, komunikat błędu do 500 znaków.
 
-const HOME = process.env.HOME ?? "/home/user"
+const HOME = homedir()
 const AUDIT_DIR = join(HOME, "mempalace", "audit")
 const STATE_DIR = join(HOME, ".mempalace", "hook_state")
 
