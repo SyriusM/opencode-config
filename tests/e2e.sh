@@ -27,6 +27,7 @@ echo "== instalacja"
 sprawdz "opencode.json wygenerowany dla atrapy" grep -q '"local/atrapa"' "$HOME/.config/opencode/opencode.json"
 sprawdz "opencode.json ma enabled_providers i small_model" grep -q '"small_model": "local/atrapa"' "$HOME/.config/opencode/opencode.json"
 sprawdz "freecode --sprawdz" freecode --sprawdz
+sprawdz "freecode --version" bash -c 'freecode --version | grep -q "nakładka na opencode 2\.0\.24"'
 sprawdz "install.sh --check" bash -c "'$REPO/install.sh' --check | grep -q 'Autotest: OK'"
 
 echo "== notatka w palace dla katalogu sesji"

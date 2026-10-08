@@ -4,6 +4,10 @@
   freecode [argumenty opencode]   sprawdza konfigurację i uruchamia opencode (TUI albo `run`)
   freecode --konfiguruj           konfigurator (sam odpala się tylko raz, przy pierwszym starcie)
   freecode --sprawdz              tylko kontrola konfiguracji (kod 0 = można startować)
+  freecode --version              wersja freecode i opencode pod spodem
+
+freecode to NAKŁADKA na niezmieniony opencode, nie fork: opencode aktualizuje się normalnie
+(npm i -g @opencode/cli), a freecode przy każdym starcie pilnuje, żeby działał tylko na lokalnych modelach.
 
 Dlaczego: opencode 2.x bez poprawnej konfiguracji (brak pliku, uszkodzony JSON, brak lokalnego
 `small_model`) po cichu wysyła rozmowę do darmowych modeli w chmurze. freecode przed każdym startem
@@ -24,6 +28,7 @@ import time
 import urllib.parse
 import urllib.request
 
+WERSJA = "0.1"
 HOME = os.path.expanduser("~")
 XDG = os.environ.get("XDG_CONFIG_HOME") or os.path.join(HOME, ".config")
 OC_DIR = os.environ.get("OPENCODE_CONFIG_DIR") or os.path.join(XDG, "opencode")
@@ -299,9 +304,36 @@ def konfiguruj():
 
 
 # ── start ────────────────────────────────────────────────────────────────────────────────────
+def wersja_opencode(oc):
+    """Wersja z package.json obok binarki (szybko), w razie czego `opencode --version`."""
+    d = os.path.dirname(os.path.realpath(oc))
+    for _ in range(4):
+        p = os.path.join(d, "package.json")
+        if os.path.isfile(p):
+            try:
+                v = json.load(open(p, encoding="utf-8")).get("version")
+                if v:
+                    return v
+            except (ValueError, OSError):
+                pass
+        d = os.path.dirname(d)
+    try:
+        import subprocess
+        r = subprocess.run([oc, "--version"], capture_output=True, text=True, timeout=10)
+        return (r.stdout.strip().split() or ["?"])[-1].lstrip("v")
+    except (OSError, subprocess.SubprocessError):
+        return "?"
+
+
+def opis(oc):
+    return f"freecode {WERSJA} — nakładka na opencode {wersja_opencode(oc) if oc else '(nie znaleziono)'}, tylko lokalne modele"
+
+
 def main(argv):
     if argv[:1] in (["-h"], ["--help"]):
         print(__doc__.strip()); return 0
+    if argv[:1] in (["-v"], ["--version"]):
+        print(opis(os.environ.get("FREECODE_OPENCODE") or shutil.which("opencode"))); return 0
     if argv[:1] == ["--konfiguruj"]:
         return konfiguruj()
     if not os.path.exists(ZNACZNIK) and argv[:1] != ["--sprawdz"]:
@@ -328,6 +360,7 @@ def main(argv):
         info("freecode: nie znaleziono opencode (npm i -g @opencode/cli)"); return 1
     os.environ["OPENCODE_DISABLE_AUTOUPDATE"] = "1"
     os.environ["OPENCODE_DISABLE_MODELS_FETCH"] = "1"
+    info(kolor(2, opis(oc)))
     sub = argv[0] if argv and not argv[0].startswith("-") and not os.path.isdir(argv[0]) else None
     if sub is None:                       # TUI
         args = [oc, "--standalone", *argv]

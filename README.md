@@ -52,7 +52,9 @@ opencode 2.x bez poprawnej konfiguracji po cichu wysyła rozmowę do darmowych m
 
 Do tego usługa w tle (`opencode serve --service`) trzyma konfigurację z chwili swojego startu, więc poprawka pliku nie działa od razu.
 
-`freecode` to nakładka na niezmieniony opencode:
+`freecode` to **nakładka, nie fork**. opencode instalujesz i aktualizujesz normalnie (`npm i -g @opencode/cli`), a freecode przy każdym starcie pilnuje, żeby działał tylko na lokalnych modelach. `freecode --version` pokazuje obie wersje, np. `freecode 0.1 — nakładka na opencode 2.0.24, tylko lokalne modele`. Po aktualizacji opencode zmień wersję w `.github/workflows/test.yml`, a test pokaże, czy nakładka dalej działa.
+
+Co robi:
 
 - **przy pierwszym starcie** odpala konfigurator. Ten wykrywa lokalny serwer (llama.cpp :8080, Ollama :11434, LM Studio :1234, vLLM :8000) i zapisuje bezpieczny `opencode.json`. Do istniejącego pliku proponuje dopisać `enabled_providers` i `small_model`, z kopią zapasową. Ponowne uruchomienie: `freecode --konfiguruj`;
 - **przy każdym starcie** sprawdza wszystkie źródła konfiguracji: globalne, `$OPENCODE_CONFIG`, `$OPENCODE_CONFIG_CONTENT` i pliki projektu aż do korzenia repozytorium. Odmawia startu, jeśli JSON jest uszkodzony albo którykolwiek model czy dostawca nie jest lokalny (localhost, 127.0.0.0/8, ::1, hosty z `FREECODE_HOSTY`);
