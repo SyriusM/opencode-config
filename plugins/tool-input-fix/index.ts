@@ -1,4 +1,4 @@
-import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync } from "node:fs"
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs"
 import { homedir } from "node:os"
 import { join } from "node:path"
 
@@ -57,10 +57,10 @@ function fixCode(code: string): { code: string; fixes: string[] } {
       fixes.push(name)
     }
   }
-  step("ogon-xml", (s) => s.replace(TAIL, ""))
-  step("prefiks-code", (s) => s.replace(/^\s*code\s*:\s*/, ""))
+  step("xml-tail", (s) => s.replace(TAIL, ""))
+  step("code-prefix", (s) => s.replace(/^\s*code\s*:\s*/, ""))
   // `;\\n` między instrukcjami przy poprawnych napisach (35B) — zamieniamy tylko po ; { } )
-  if (!parses(c)) step("nowa-linia-miedzy-instrukcjami", (s) => {
+  if (!parses(c)) step("newline-between-statements", (s) => {
     const n = s.replace(/([;{})])\\n/g, "$1\n")
     return parses(n) ? n : s
   })
@@ -76,10 +76,10 @@ function fixCode(code: string): { code: string; fixes: string[] } {
     if (u !== undefined && !parses(u)) {
       // unescape zwrócił coś innego niż oryginał, ale nie parsuje — spróbuj escape-cudzyslowow jako fallback
       const e = u.replace(/\\"/g, '"')
-      if (e !== u && parses(e)) { c = e; fixes.push("unescape-poziom→escape-cudzyslowow") }
-    } else if (u !== undefined) { c = u; fixes.push("unescape-poziom") }
+      if (e !== u && parses(e)) { c = e; fixes.push("unescape-level→escape-quotes") }
+    } else if (u !== undefined) { c = u; fixes.push("unescape-level") }
   }
-  if (!parses(c)) step("escape-cudzyslowow", (s) => s.replace(/\\"/g, '"'))
+  if (!parses(c)) step("escape-quotes", (s) => s.replace(/\\"/g, '"'))
   if (!parses(c)) return { code, fixes: [] } // nie umiemy — oddajemy oryginał
   return { code: c, fixes }
 }
@@ -100,9 +100,9 @@ function fixNames(code: string): { code: string; fixes: string[] } {
   }
   // wbudowany webfetch nie istnieje w `execute`; MCP fetch ma te same argumenty (url, max_length, start_index, raw)
   step("webfetch→fetch", /\btools\.webfetch\.webfetch\s*\(/g, "tools.fetch.fetch(")
-  step("podwojony-namespace", /\btools\.(filesystem|mempalace|playwright|fetch)\.\1\./g, "tools.$1.")
+  step("double-namespace", /\btools\.(filesystem|mempalace|playwright|fetch)\.\1\./g, "tools.$1.")
   // {target|element: {ref: X}} → target: X
-  step("target-obiekt", /\b(target|element)\s*:\s*\{\s*ref\s*:\s*([^{}]+?)\s*\}/g, "target: $2")
+  step("target-object", /\b(target|element)\s*:\s*\{\s*ref\s*:\s*([^{}]+?)\s*\}/g, "target: $2")
   // browser_click({ref: X}) / ({selector: X}) → target
   step(
     "ref→target",
@@ -117,7 +117,7 @@ function fixNames(code: string): { code: string; fixes: string[] } {
   )
   step("elements→fields", /(\bbrowser_fill_form\s*\(\s*\{\s*)elements(\s*:)/g, "$1fields$2")
   // w polach fill_form: ref → target, type "input"/"text" → "textbox"
-  step("fill_form-pola", /\bbrowser_fill_form\s*\(\s*\{[\s\S]*?\]\s*\}\s*\)/g, (m: string) =>
+  step("fill_form-fields", /\bbrowser_fill_form\s*\(\s*\{[\s\S]*?\]\s*\}\s*\)/g, (m: string) =>
     m
       .replace(/([{,]\s*)ref(\s*:)/g, "$1target$2")
       .replace(/\btype\s*:\s*(['"])(input|text|textarea|search|email)\1/g, 'type: "textbox"'),
@@ -144,6 +144,18 @@ function fixMcp(tool: string, input: any): string[] {
   const fixes: string[] = []
   if (!input || typeof input !== "object") return fixes
   if (BROWSER.test(tool)) {
+    // zablokuj browser_navigate z protokołami, których Playwright nie obsługuje → ERR_ABORTED
+    if (/_navigate$/.test(tool) && typeof input.url === "string") {
+      if (/^(steam|file|data|chrome|about):\/\//i.test(input.url)) {
+        input._block = true
+        fixes.push("navigate-protocol-block")
+      }
+    }
+    // browser_type bez targetu/ref/element/selector — model podaje tylko tekst, nie da się naprawić
+    if (/_type$/.test(tool) && input.target === undefined && typeof input.text === "string" && !input.ref && !input.element && !input.selector) {
+      input._block = true
+      fixes.push("type-without-target")
+    }
     if (TARGET_TOOLS.test(tool)) {
       if (input.target === undefined) {
         const alt = input.ref ?? input.element ?? input.selector
@@ -152,7 +164,7 @@ function fixMcp(tool: string, input: any): string[] {
           if (input.ref !== undefined) delete input.ref
           if (input.selector !== undefined) delete input.selector
           if (typeof input.element !== "string") delete input.element
-          fixes.push("target-z-ref/element")
+          fixes.push("target-from-ref/element")
         }
       } else {
         // "ref=f19e2" → "f19e2" (model podaje ref= jako prefiks wartości target)
@@ -191,15 +203,15 @@ function fixMcp(tool: string, input: any): string[] {
             g.target = t
             delete g.ref
             if (typeof g.element !== "string") delete g.element
-            fixes.push("pole-target")
+            fixes.push("field-target")
           }
           if (!FIELD_TYPES.includes(g.type)) {
             g.type = typeof g.value === "boolean" ? "checkbox" : "textbox"
-            fixes.push("pole-type")
+            fixes.push("field-type")
           }
           if (typeof g.name !== "string" || !g.name) {
             g.name = String(g.element ?? g.label ?? g.target ?? "pole")
-            fixes.push("pole-name")
+            fixes.push("field-name")
           }
           return g
         })
@@ -435,6 +447,34 @@ const keyOf = (tool: string, input: unknown) => {
   }
 }
 
+// ── angielskie nazwy eksportowane (test i backward compat) ──────────────────────────────────────
+export { fixCode, fixNames, fixMcp }
+
+// mapa: polskie nazwy wniosków → angielskie (dla testów i deweloperów)
+const HINT_MAP: Record<string, string> = {
+  "python-w-execute": "python-in-execute",
+  "websearch-w-execute": "websearch-in-execute",
+  "js-w-shell": "js-in-shell",
+  "zabijanie-uslug": "killing-services",
+  "zapis-do-systemu": "write-to-system",
+  "naprawa-zapis-do-pamieci": "repair-memory-write",
+  "naprawa-mempalace-cli": "repair-mempalace-cli",
+}
+
+export function hint(tool: string, input: any, repair = false) {
+  const w = wskazowka(tool, input, repair)
+  if (!w) return undefined
+  return { name: HINT_MAP[w.nazwa] ?? w.nazwa, text: w.tekst, always: w.zawsze }
+}
+
+export function matchLesson(message: string) {
+  const w = dopasujWniosek(message)
+  if (!w) return undefined
+  return { file: w.plik, symptom: w.objaw, cause: w.przyczyna, fix: w.naprawa, example: w.przyklad }
+}
+
+export const enablesRepairMode = wlaczaNaprawe
+
 export default {
   id: "tool-input-fix",
   async setup(ctx: any) {
@@ -486,6 +526,20 @@ export default {
         if (fixes.length) {
           ev.input = input
           log(`FIX ${tool} [${fixes.join(",")}] session=${ev.sessionID}`)
+        }
+
+        // blokada: browser_navigate z protokołem niestandardowym lub browser_type bez targetu
+        if (input && typeof input === "object" && input._block === true) {
+          let stopMsg: string
+          if (/_navigate$/.test(tool)) {
+            stopMsg = `browser_navigate nie obsługuje protokołu ${JSON.stringify(input.url?.slice(0, 40))}. Playwright akceptuje tylko http/https. Użyj shell: xdg-open "${input.url}" lub narzędzie read do plików lokalnych.`
+          } else if (/_type$/.test(tool)) {
+            stopMsg = "browser_type wymaga targetu (element do wpisania). Najpierw zrób browser_snapshot(), weź ref z [ref=xxx] i podaj: target: \"xxx\". Albo użyj browser_fill_form do wypełniania formularzy."
+          } else {
+            stopMsg = "Wywołanie zablokowane — niezgodne ze schematem."
+          }
+          if (tool === "execute") ev.input = { ...input, code: `throw new Error(${JSON.stringify(stopMsg)})` }
+          log(`BLOCK ${tool} session=${ev.sessionID}`)
         }
 
         // tryb naprawczy sesji

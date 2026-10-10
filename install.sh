@@ -70,23 +70,23 @@ fi
 autotest() {
   local bledy=0 py
   echo "Autotest"
-  for n in tool-input-fix lesson-draft palace-kontekst error-hook auto-kopie; do
+  for n in tool-input-fix lesson-draft palace-context error-hook auto-backup; do
     if [ -f "$PLUGINS/$n/index.ts" ]; then ok "wtyczka $n"; else blad "brak wtyczki $n"; bledy=$((bledy+1)); fi
   done
-  for f in palace-kontekst audyt-retencja oc-wniosek oc-regula oc-kopie; do
+  for f in palace-context audyt-retencja oc-wniosek oc-regula oc-kopie; do
     if [ -x "$BIN/$f" ]; then ok "skrypt ~/bin/$f"; else blad "brak ~/bin/$f"; bledy=$((bledy+1)); fi
   done
-  py="$(head -1 "$BIN/palace-kontekst" | sed 's/^#!//')"
+  py="$(head -1 "$BIN/palace-context" | sed 's/^#!//')"
   if "$py" -I -c "import mempalace.mcp_server" 2>/dev/null; then ok "MemPalace importuje się ($py)"
-  else uwaga "MemPalace nie importuje się w $py — palace-kontekst i oc-wniosek będą milczeć"; fi
+  else uwaga "MemPalace nie importuje się w $py — palace-context i oc-wniosek będą milczeć"; fi
   local tmp; tmp="$(mktemp -d "$HOME/.oc-config-test.XXXX")"
-  if out="$(timeout 120 "$BIN/palace-kontekst" "$tmp" 2>&1)"; then ok "palace-kontekst działa (wynik: ${out:-pusty — palace bez notatek dla tego katalogu})"
-  else blad "palace-kontekst padł: $out"; bledy=$((bledy+1)); fi
+  if out="$(timeout 120 "$BIN/palace-context" "$tmp" 2>&1)"; then ok "palace-context działa (wynik: ${out:-pusty — palace bez notatek dla tego katalogu})"
+  else blad "palace-context padł: $out"; bledy=$((bledy+1)); fi
   rmdir "$tmp" 2>/dev/null || true
   if out="$(timeout 120 "$BIN/oc-wniosek" 2>&1)"; then ok "oc-wniosek: $(echo "$out" | tail -1)"
   else blad "oc-wniosek padł: $(echo "$out" | tail -2)"; bledy=$((bledy+1)); fi
   if command -v node >/dev/null && command -v npx >/dev/null; then
-    for n in tool-input-fix lesson-draft palace-kontekst error-hook auto-kopie; do
+    for n in tool-input-fix lesson-draft palace-context error-hook auto-backup; do
       if npx -y esbuild "$PLUGINS/$n/index.ts" --log-level=error --outfile=/dev/null >/dev/null 2>&1; then ok "składnia $n"
       else blad "błąd składni $n"; bledy=$((bledy+1)); fi
     done
@@ -122,7 +122,7 @@ elif tak_nie "MemPalace nie znaleziony. Utworzyć venv w $VENV_DOMYSLNY i zainst
   ok "zainstalowano mempalace $("$PY" -m pip show mempalace 2>/dev/null | sed -n 's/^Version: //p')"
 else
   PY="$(command -v python3)"
-  uwaga "bez MemPalace: palace-kontekst i oc-wniosek będą milczeć (wtyczki samonaprawy działają)"
+  uwaga "bez MemPalace: palace-context i oc-wniosek będą milczeć (wtyczki samonaprawy działają)"
 fi
 
 echo "3. Ustawienia"
@@ -141,7 +141,7 @@ WINGS="$(pytaj "Skrzydła palace widoczne dla modelu (lista po przecinku, * = ws
 mkdir -p "$CONF_DIR"
 [ -f "$CONF" ] && cp -p "$CONF" "$CONF.bak-$TS"
 cat > "$CONF" <<EOF
-# opencode-config — czytane przez ~/bin/palace-kontekst
+# opencode-config — czytane przez ~/bin/palace-context
 PALACE_EMBED_PORT=$PORT
 PALACE_WINGS=$WINGS
 MEMPALACE_SRC=$HOME/mempalace

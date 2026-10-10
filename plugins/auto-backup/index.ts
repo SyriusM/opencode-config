@@ -127,7 +127,7 @@ function autoKopia(tool: string, input: any, cwd?: string): string[] {
 }
 
 export default {
-  id: "auto-kopie",
+  id: "auto-backup",
   async setup(ctx: any) {
     await ctx.tool.hook("execute.before", (ev: any) => {
       try {

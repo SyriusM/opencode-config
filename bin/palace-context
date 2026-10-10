@@ -1,8 +1,8 @@
 #!/home/user/mempalace/.venv/bin/python
 """Krótki kontekst z mempalace dla katalogu projektu — doklejany do promptu systemowego opencode
-przez wtyczkę palace-kontekst. Wypisuje gotowy tekst albo nic.
+przez wtyczkę palace-context. Wypisuje gotowy tekst albo nic.
 
-Użycie: palace-kontekst <katalog> [--debug]
+Użycie: palace-context <katalog> [--debug]
 - Serwer embeddingów (PALACE_EMBED_PORT: 8080 llama.cpp, 11434 Ollama) albo palace martwe → jedna linia ostrzeżenia zamiast pustki
   (inaczej model myśli, że palace „nic nie wie”, a to brak danych, nie pomiar).
 - Katalog domowy / ogólne → tylko kontrola zdrowia, bez wyszukiwania (zapytanie bez treści = szum).
