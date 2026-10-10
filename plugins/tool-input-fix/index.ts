@@ -317,17 +317,17 @@ const WSK_SHELL: Wskazowka[] = [
     tekst: 'Polecenie nazywa się kbuildsycoca6: kbuildsycoca6 --noincremental' },
 ]
 
-// TRYB NAPRAWCZY (sesja, w której model wczytał skill `autodiag` albo używa oc-wniosek / oc-regula / testu wtyczki):
+// TRYB NAPRAWCZY (sesja, w której model wczytał skill `autodiag` albo używa lesson-note / agent-rule / testu wtyczki):
 // osobista pamięć użytkownika (serwer MCP `mempalace` = ~/.mempalace) jest wtedy TYLKO DO ODCZYTU. Wnioski z napraw idą
-// do osobnego pałacu przez ~/bin/oc-wniosek. Poza trybem naprawczym model ma pełny dostęp jak dotąd.
+// do osobnego pałacu przez ~/bin/lesson-note. Poza trybem naprawczym model ma pełny dostęp jak dotąd.
 // Te wskazówki nie mają limitu powtórzeń — to blokada, nie podpowiedź.
 const WSK_NAPRAWA_EXECUTE: Wskazowka[] = [
   { nazwa: "naprawa-zapis-do-pamieci", re: /\btools\.mempalace\.mempalace_(add_drawer|delete_drawer|kg_add|kg_invalidate|diary_write)\b/,
-    tekst: 'Trwa tryb naprawczy: pamięć użytkownika jest teraz tylko do odczytu (wolno mempalace_search). Wniosek z naprawy zapisz narzędziem shell: ~/bin/oc-wniosek dodaj "OBJAW: komunikat błędu" "PRZYCZYNA" "NAPRAWA" "PRZYKŁAD poprawnego wywołania"' },
+    tekst: 'Trwa tryb naprawczy: pamięć użytkownika jest teraz tylko do odczytu (wolno mempalace_search). Wniosek z naprawy zapisz narzędziem shell: ~/bin/lesson-note dodaj "OBJAW: komunikat błędu" "PRZYCZYNA" "NAPRAWA" "PRZYKŁAD poprawnego wywołania"' },
 ]
 const WSK_NAPRAWA_SHELL: Wskazowka[] = [
   { nazwa: "naprawa-mempalace-cli", re: /(^|[;&|]\s*)mempalace\s+(mine|init|split|compress|repair)\b/,
-    tekst: 'Trwa tryb naprawczy: nie zmieniaj pałacu użytkownika poleceniem mempalace. Znane rozwiązania: ~/bin/oc-wniosek szukaj "komunikat"; nowy wniosek: ~/bin/oc-wniosek dodaj "OBJAW" "PRZYCZYNA" "NAPRAWA"' },
+    tekst: 'Trwa tryb naprawczy: nie zmieniaj pałacu użytkownika poleceniem mempalace. Znane rozwiązania: ~/bin/lesson-note szukaj "komunikat"; nowy wniosek: ~/bin/lesson-note dodaj "OBJAW" "PRZYCZYNA" "NAPRAWA"' },
 ]
 
 // czy to wywołanie włącza tryb naprawczy dla sesji
@@ -336,7 +336,7 @@ function wlaczaNaprawe(tool: string, input: any): boolean {
     if (!input || typeof input !== "object") return false
     if (tool === "skill") return /^autodiag$/i.test(String(input.id ?? input.name ?? input.skill ?? ""))
     if (/^(shell|bash|fish)$/.test(tool) && typeof input.command === "string")
-      return /\b(oc-wniosek|oc-regula|test-wtyczki\.sh|powtorka-historii\.sh)\b/.test(input.command)
+      return /\b(oc-wniosek|lesson-note|oc-regula|agent-rule|test-wtyczki\.sh|test-plugin\.sh|powtorka-historii\.sh|history-replay\.sh)\b/.test(input.command)
   } catch {}
   return false
 }
@@ -365,7 +365,7 @@ function wskazowka(tool: string, input: any, naprawa = false): { nazwa: string; 
 
 // ── ZNANE ROZWIĄZANIA PRZY BŁĘDZIE (auto-recall z kopalni) ───────────────────────────────────────
 // Gdy narzędzie zwróci błąd, szukamy w ~/oc-audyt/kopalnia/*.md wniosku, którego OBJAW pasuje do komunikatu,
-// i doklejamy jego NAPRAWĘ i PRZYKŁAD do wyniku błędu. Model dostaje rozwiązanie bez wołania oc-wniosek.
+// i doklejamy jego NAPRAWĘ i PRZYKŁAD do wyniku błędu. Model dostaje rozwiązanie bez wołania lesson-note.
 // Dopasowanie leksykalne (bez embeddingów, szybkie, deterministyczne). Ten sam wniosek najwyżej raz na sesję.
 type Wniosek = { plik: string; objaw: string; przyczyna: string; naprawa: string; przyklad: string; slowa: string[] }
 const KOPALNIA = join(HOME, "oc-audyt", "kopalnia")

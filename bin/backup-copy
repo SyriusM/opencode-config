@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Automatyczne kopie plików konfiguracji opencode (robi je wtyczka tool-input-fix przed każdą zmianą).
-#   oc-kopie                  lista plików, które mają kopie (ile, ostatnia)
-#   oc-kopie FRAGMENT         kopie plików pasujących do fragmentu nazwy, np.: oc-kopie AGENTS
-#   oc-kopie diff KOPIA       różnica: kopia → obecny plik
-#   oc-kopie przywroc KOPIA   przywraca plik z kopii (obecną wersję najpierw też zapisuje jako kopię)
+#   backup-copy                  lista plików, które mają kopie (ile, ostatnia)
+#   backup-copy FRAGMENT         kopie plików pasujących do fragmentu nazwy, np.: backup-copy AGENTS
+#   backup-copy diff KOPIA       różnica: kopia → obecny plik
+#   backup-copy przywroc KOPIA   przywraca plik z kopii (obecną wersję najpierw też zapisuje jako kopię)
 set -u
 K="$HOME/oc-audyt/auto-kopie"
 

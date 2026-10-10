@@ -2,13 +2,13 @@
 """Kopalnia błędów i rozwiązań opencode: plik w ~/oc-audyt/kopalnia/ + wpis w OSOBNYM pałacu ~/.mempalace-opencode
 (wing opencode, room bledy) — wnioski modeli nie mieszają się z osobistą pamięcią użytkownika w ~/.mempalace.
 
-  oc-wniosek                                   ile wniosków i ostatnie 5
-  oc-wniosek szukaj "komunikat albo słowa"     znane rozwiązania (dokładne słowa w plikach + podobne w mempalace)
-  oc-wniosek dodaj "OBJAW" "PRZYCZYNA" "NAPRAWA" ["PRZYKŁAD poprawnego wywołania"]
+  lesson-note                                   ile wniosków i ostatnie 5
+  lesson-note szukaj "komunikat albo słowa"     znane rozwiązania (dokładne słowa w plikach + podobne w mempalace)
+  lesson-note dodaj "OBJAW" "PRZYCZYNA" "NAPRAWA" ["PRZYKŁAD poprawnego wywołania"]
         OBJAW     = komunikat błędu albo co się działo (dosłownie, krótko)
         PRZYCZYNA = dlaczego (jedno zdanie)
         NAPRAWA   = co zmieniono i gdzie (plik, reguła) albo jak to obejść
-  oc-wniosek uzupelnij                         dopisz do mempalace wnioski, które są tylko w plikach
+  lesson-note uzupelnij                         dopisz do mempalace wnioski, które są tylko w plikach
 
 Zabezpieczenia: najwyżej 15 nowych wniosków dziennie; w trakcie miningu pałacu zapis idzie tylko do pliku
 (potem `uzupelnij`); plik jest źródłem prawdy — przerwany zapis do pałacu niczego nie gubi.
@@ -49,7 +49,7 @@ def trwa_mining():
     """Ciężki zapis do pałacu z innego procesu (mining) — wtedy nie dokładamy własnych zapisów."""
     try:
         r = subprocess.run(["pgrep", "-af", "mempalace mine|mine_case"], capture_output=True, text=True)
-        return any("pgrep" not in l and "oc-wniosek" not in l for l in r.stdout.splitlines())
+        return any("pgrep" not in l and "lesson-note" not in l for l in r.stdout.splitlines())
     except Exception:
         return False
 
@@ -68,13 +68,13 @@ def w_palacu():
 
 def do_palacu(plik, tresc):
     if trwa_mining():
-        return "trwa mining pałacu — wniosek tylko w pliku (później: oc-wniosek uzupelnij)"
+        return "trwa mining pałacu — wniosek tylko w pliku (później: lesson-note uzupelnij)"
     try:
         from mempalace import mcp_server as m
-        r = cicho(m.tool_add_drawer, wing=WING, room=ROOM, content=tresc, added_by="oc-wniosek", source_file=plik)
+        r = cicho(m.tool_add_drawer, wing=WING, room=ROOM, content=tresc, added_by="lesson-note", source_file=plik)
         return "zapisano w pałacu opencode" if isinstance(r, dict) and r.get("success") else f"mempalace: {str(r)[:120]}"
     except Exception as e:  # plik i tak został — pałac można uzupełnić później
-        return f"mempalace niedostępny ({type(e).__name__}); wniosek jest w pliku (później: oc-wniosek uzupelnij)"
+        return f"mempalace niedostępny ({type(e).__name__}); wniosek jest w pliku (później: lesson-note uzupelnij)"
 
 
 def uzupelnij():
@@ -145,7 +145,7 @@ def szukaj(q):
     except Exception:
         pass
     if not wyniki:
-        print("Brak znanych rozwiązań dla tego błędu — to nowy przypadek. Po naprawie dopisz go: oc-wniosek dodaj …")
+        print("Brak znanych rozwiązań dla tego błędu — to nowy przypadek. Po naprawie dopisz go: lesson-note dodaj …")
         return
     kolejnosc = sorted(wyniki.items(), key=lambda kv: -(kv[1][0] + kv[1][1]))[:4]
     print(f"Znane rozwiązania ({len(kolejnosc)}) — sprawdź, czy OBJAW pasuje do Twojego błędu, zanim zastosujesz:")

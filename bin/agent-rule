@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # Reguły wyuczone w AGENTS.md — jedyne miejsce, w którym model sam dopisuje reguły.
 # Blok między znacznikami <!-- WYUCZONE:START --> i <!-- WYUCZONE:END -->, najwyżej 10 linii, najstarsza wypada.
-#   oc-regula                 pokaż reguły (z numerami)
-#   oc-regula dodaj "TEKST"   dopisz regułę (jedna linia, do 200 znaków, z przykładem wywołania)
-#   oc-regula usun N          usuń regułę nr N
-# Przed każdą zmianą zapisuje kopię do ~/oc-audyt/auto-kopie (cofanie: ~/bin/oc-kopie).
+#   agent-rule                 pokaż reguły (z numerami)
+#   agent-rule dodaj "TEKST"   dopisz regułę (jedna linia, do 200 znaków, z przykładem wywołania)
+#   agent-rule usun N          usuń regułę nr N
+# Przed każdą zmianą zapisuje kopię do ~/oc-audyt/auto-kopie (cofanie: ~/bin/backup-copy).
 set -u
 PLIK="$HOME/.config/opencode/AGENTS.md"
 KOPIE="$HOME/oc-audyt/auto-kopie"
@@ -42,11 +42,11 @@ case "${1:-}" in
     [ "${#t}" -le 200 ] || { echo "Za długa (${#t} znaków, limit 200). Skróć: co robić + jeden przykład." >&2; exit 1; }
     if reguly | grep -qF -- "$t"; then echo "Taka reguła już jest."; exit 0; fi
     { reguly; echo "- $(date +%F) $t"; } | tail -n "$MAX" | zapisz
-    echo "Dopisano. $(reguly | wc -l) z $MAX reguł, plik $(wc -c < "$PLIK") bajtów. Cofnięcie: ~/bin/oc-kopie AGENTS"
+    echo "Dopisano. $(reguly | wc -l) z $MAX reguł, plik $(wc -c < "$PLIK") bajtów. Cofnięcie: ~/bin/backup-copy AGENTS"
     ;;
   usun)
     n="${2:-}"
-    [[ "$n" =~ ^[0-9]+$ ]] || { echo "Podaj numer reguły (zobacz: oc-regula)." >&2; exit 1; }
+    [[ "$n" =~ ^[0-9]+$ ]] || { echo "Podaj numer reguły (zobacz: agent-rule)." >&2; exit 1; }
     [ "$n" -ge 1 ] && [ "$n" -le "$(reguly | wc -l)" ] || { echo "Nie ma reguły nr $n." >&2; exit 1; }
     reguly | sed "${n}d" | zapisz
     echo "Usunięto regułę nr $n."

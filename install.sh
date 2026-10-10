@@ -53,7 +53,7 @@ if [ "$TRYB" = uninstall ]; then
   echo "Deinstalacja opencode-config"
   [ -f "$LISTA" ] || { blad "brak $LISTA — nic nie wiem o instalacji"; exit 1; }
   if command -v systemctl >/dev/null && systemctl --user show-environment >/dev/null 2>&1; then
-    systemctl --user disable --now audyt-retencja.timer >/dev/null 2>&1 || true
+    systemctl --user disable --now audit-retention.timer >/dev/null 2>&1 || true
   fi
   while IFS= read -r f; do
     [ -n "$f" ] || continue
@@ -73,18 +73,18 @@ autotest() {
   for n in tool-input-fix lesson-draft palace-context error-hook auto-backup; do
     if [ -f "$PLUGINS/$n/index.ts" ]; then ok "wtyczka $n"; else blad "brak wtyczki $n"; bledy=$((bledy+1)); fi
   done
-  for f in palace-context audyt-retencja oc-wniosek oc-regula oc-kopie; do
+  for f in palace-context audit-retention lesson-note agent-rule backup-copy; do
     if [ -x "$BIN/$f" ]; then ok "skrypt ~/bin/$f"; else blad "brak ~/bin/$f"; bledy=$((bledy+1)); fi
   done
   py="$(head -1 "$BIN/palace-context" | sed 's/^#!//')"
   if "$py" -I -c "import mempalace.mcp_server" 2>/dev/null; then ok "MemPalace importuje się ($py)"
-  else uwaga "MemPalace nie importuje się w $py — palace-context i oc-wniosek będą milczeć"; fi
+  else uwaga "MemPalace nie importuje się w $py — palace-context i lesson-note będą milczeć"; fi
   local tmp; tmp="$(mktemp -d "$HOME/.oc-config-test.XXXX")"
   if out="$(timeout 120 "$BIN/palace-context" "$tmp" 2>&1)"; then ok "palace-context działa (wynik: ${out:-pusty — palace bez notatek dla tego katalogu})"
   else blad "palace-context padł: $out"; bledy=$((bledy+1)); fi
   rmdir "$tmp" 2>/dev/null || true
-  if out="$(timeout 120 "$BIN/oc-wniosek" 2>&1)"; then ok "oc-wniosek: $(echo "$out" | tail -1)"
-  else blad "oc-wniosek padł: $(echo "$out" | tail -2)"; bledy=$((bledy+1)); fi
+  if out="$(timeout 120 "$BIN/lesson-note" 2>&1)"; then ok "lesson-note: $(echo "$out" | tail -1)"
+  else blad "lesson-note padł: $(echo "$out" | tail -2)"; bledy=$((bledy+1)); fi
   if command -v node >/dev/null && command -v npx >/dev/null; then
     for n in tool-input-fix lesson-draft palace-context error-hook auto-backup; do
       if npx -y esbuild "$PLUGINS/$n/index.ts" --log-level=error --outfile=/dev/null >/dev/null 2>&1; then ok "składnia $n"
@@ -122,7 +122,7 @@ elif tak_nie "MemPalace nie znaleziony. Utworzyć venv w $VENV_DOMYSLNY i zainst
   ok "zainstalowano mempalace $("$PY" -m pip show mempalace 2>/dev/null | sed -n 's/^Version: //p')"
 else
   PY="$(command -v python3)"
-  uwaga "bez MemPalace: palace-context i oc-wniosek będą milczeć (wtyczki samonaprawy działają)"
+  uwaga "bez MemPalace: palace-context i lesson-note będą milczeć (wtyczki samonaprawy działają)"
 fi
 
 echo "3. Ustawienia"
@@ -223,9 +223,9 @@ echo "5. Usługi systemd (--user)"
 if command -v systemctl >/dev/null && systemctl --user show-environment >/dev/null 2>&1; then
   for f in "$REPO"/systemd/*; do instaluj "$f" "$CFG/systemd/user/$(basename "$f")" 644; done
   systemctl --user daemon-reload
-  systemctl --user enable --now audyt-retencja.timer >/dev/null 2>&1 && ok "audyt-retencja.timer włączony"
+  systemctl --user enable --now audit-retention.timer >/dev/null 2>&1 && ok "audit-retention.timer włączony"
 else
-  uwaga "brak systemd --user — retencję audytu uruchamiaj ręcznie: ~/bin/audyt-retencja"
+  uwaga "brak systemd --user — retencję audytu uruchamiaj ręcznie: ~/bin/audit-retention"
 fi
 
 { cat "$LISTA.nowa"; [ -f "$LISTA" ] && cat "$LISTA"; true; } | sort -u > "$LISTA.tmp" && mv "$LISTA.tmp" "$LISTA" && rm -f "$LISTA.nowa"

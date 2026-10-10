@@ -8,13 +8,13 @@ ARCH="$HOME/mempalace/audit-archive"
 DNI="${1:-30}"
 mkdir -p "$ARCH"
 mapfile -t PLIKI < <(cd "$AUDIT" && find . -type f -name '*.jsonl' -mtime +"$DNI" | sort)
-if [ "${#PLIKI[@]}" -eq 0 ]; then echo "audyt-retencja: nic starszego niż $DNI dni"; exit 0; fi
+if [ "${#PLIKI[@]}" -eq 0 ]; then echo "audit-retention: nic starszego niż $DNI dni"; exit 0; fi
 TAR="$ARCH/audit-$(date +%Y%m%d-%H%M%S).tar.gz"
 tar -C "$AUDIT" -czf "$TAR" "${PLIKI[@]}"
 TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
 tar -C "$TMP" -xzf "$TAR"
 for f in "${PLIKI[@]}"; do
-  cmp -s "$AUDIT/$f" "$TMP/$f" || { echo "audyt-retencja: RÓŻNICA w $f — nic nie skasowano, archiwum $TAR zostaje"; exit 1; }
+  cmp -s "$AUDIT/$f" "$TMP/$f" || { echo "audit-retention: RÓŻNICA w $f — nic nie skasowano, archiwum $TAR zostaje"; exit 1; }
 done
 for f in "${PLIKI[@]}"; do rm -f "$AUDIT/$f"; done
-echo "audyt-retencja: ${#PLIKI[@]} plików → $TAR (zweryfikowane)"
+echo "audit-retention: ${#PLIKI[@]} plików → $TAR (zweryfikowane)"

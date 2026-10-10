@@ -12,12 +12,12 @@ To czysty kod, bez konfiguracji modeli, promptów i danych.
 | `plugins/lesson-draft` | Po każdej turze zbiera błędy narzędzi ze strumienia zdarzeń. Powtarzający się wzorzec zapisuje jako szkic lekcji do ręcznego przeglądu (`~/tmp-opencode/lessons-draft.md`). |
 | `plugins/palace-context` + `bin/palace-context` | Dokleja do promptu systemowego do 3 notatek z MemPalace dla katalogu sesji, tylko ze skrzydeł wybranych przy instalacji (domyślnie wszystkich; próg podobieństwa 0,57). Gdy embeddingi nie działają, dokleja ostrzeżenie zamiast pustki. |
 | `plugins/error-hook` | Zapisuje błędy narzędzi do JSONL (`~/mempalace/audit/`). |
-| `plugins/auto-backup` | Przed każdą zmianą plików konfiguracji robi kopię zapasową (cofanie: `bin/oc-kopie`). |
-| `bin/oc-wniosek` | Kopalnia wniosków: `OBJAW / PRZYCZYNA / NAPRAWA / PRZYKŁAD` w plikach i w **osobnym** palace (`~/.mempalace-opencode`). Wnioski modeli nie mieszają się z pamięcią osobistą. Format: `kopalnia/PRZYKLAD.md`. |
-| `bin/oc-regula` | Pozwala modelowi dopisać krótką regułę do bloku `WYUCZONE` w `AGENTS.md` (limit 10 linii, z kopią). |
+| `plugins/auto-backup` | Przed każdą zmianą plików konfiguracji robi kopię zapasową (cofanie: `bin/backup-copy`). |
+| `bin/lesson-note` | Kopalnia wniosków: `OBJAW / PRZYCZYNA / NAPRAWA / PRZYKŁAD` w plikach i w **osobnym** palace (`~/.mempalace-opencode`). Wnioski modeli nie mieszają się z pamięcią osobistą. Format: `kopalnia/PRZYKLAD.md`. |
+| `bin/agent-rule` | Pozwala modelowi dopisać krótką regułę do bloku `WYUCZONE` w `AGENTS.md` (limit 10 linii, z kopią). |
 | `freecode/freecode` | opencode tylko na lokalnych modelach: konfigurator przy pierwszym starcie, kontrola konfiguracji przed każdym startem (opis niżej). |
 | `freecode/przemianuj` | Kopia źródeł opencode z nazwą freecode (`przemianuj ZRODLO CEL`). Czego nie można zmienić (licencja, domeny, repozytoria, zewnętrzne paczki npm, pliki binarne, logo), zapisuje do logu z plikiem i linią. Dodatkowo spisuje wszystkie adresy sieciowe w kodzie. |
-| `bin/audyt-retencja` + `systemd/` | Co tydzień przenosi audyt starszy niż 30 dni do archiwum tar. Pliki kasuje dopiero po weryfikacji bajt w bajt. |
+| `bin/audit-retention` + `systemd/` | Co tydzień przenosi audyt starszy niż 30 dni do archiwum tar. Pliki kasuje dopiero po weryfikacji bajt w bajt. |
 
 ## Instalacja
 
@@ -35,9 +35,9 @@ Co robi instalator:
 1. Szuka MemPalace (`$MEMPALACE_PYTHON`, `~/mempalace/.venv`, potem systemowy `python3`). Jeśli go nie ma, proponuje venv w `~/.local/share/opencode-config/venv` i instalację z PyPI. Pyta o port serwera embeddingów do kontroli zdrowia: `0` = wbudowane w MemPalace, bez serwera (domyślnie), `8080` = llama.cpp, `11434` = Ollama.
 2. Szuka serwera modeli na `127.0.0.1:8080` (llama.cpp) i `127.0.0.1:11434` (Ollama). Jeśli znajdzie, a nie masz jeszcze `~/.config/opencode/opencode.json`, proponuje jego zapis z pierwszym modelem z listy (z `enabled_providers` i lokalnym `small_model`). Istniejącego pliku nie rusza.
 3. Kopiuje wtyczki do `~/.config/opencode/plugins/` (opencode wczytuje je stamtąd sam, nie trzeba ich wpisywać do `opencode.json`), skrypty do `~/bin/`, a ustawienia zapisuje w `~/.config/opencode-config/config`. Nadpisywane pliki dostają kopię `.bak-…`.
-4. Włącza timer `audyt-retencja` (systemd `--user`, jeśli jest) i uruchamia autotest.
+4. Włącza timer `audit-retention` (systemd `--user`, jeśli jest) i uruchamia autotest.
 
-`~/bin` powinien być w `PATH`, bo model wywołuje `oc-wniosek` i `oc-regula` przez powłokę. Instalator ostrzega, jeśli nie jest.
+`~/bin` powinien być w `PATH`, bo model wywołuje `lesson-note` i `agent-rule` przez powłokę. Instalator ostrzega, jeśli nie jest.
 
 ## freecode: opencode tylko na lokalnych modelach
 
@@ -96,16 +96,16 @@ Wtyczki działają bez tego pliku. Żeby model sam zapisywał wnioski i reguły,
 
 ```markdown
 ## Błędy narzędzi
-Zanim zaczniesz szukać przyczyny błędu narzędzia, sprawdź `~/bin/oc-wniosek szukaj "komunikat"`.
-Gdy rozwiążesz nowy błąd, zapisz wniosek: `~/bin/oc-wniosek dodaj "OBJAW" "PRZYCZYNA" "NAPRAWA" "PRZYKŁAD"`.
+Zanim zaczniesz szukać przyczyny błędu narzędzia, sprawdź `~/bin/lesson-note szukaj "komunikat"`.
+Gdy rozwiążesz nowy błąd, zapisz wniosek: `~/bin/lesson-note dodaj "OBJAW" "PRZYCZYNA" "NAPRAWA" "PRZYKŁAD"`.
 
 ## Reguły wyuczone
-Jedyne miejsce, w którym możesz sam dopisać regułę, i tylko poleceniem `~/bin/oc-regula dodaj "co robić + przykład"`.
+Jedyne miejsce, w którym możesz sam dopisać regułę, i tylko poleceniem `~/bin/agent-rule dodaj "co robić + przykład"`.
 <!-- WYUCZONE:START -->
 <!-- WYUCZONE:END -->
 ```
 
-Bez znaczników `WYUCZONE` polecenie `oc-regula` odmawia zapisu.
+Bez znaczników `WYUCZONE` polecenie `agent-rule` odmawia zapisu.
 
 ## Gdzie co ląduje
 
