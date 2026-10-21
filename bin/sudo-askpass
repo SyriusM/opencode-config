@@ -3,6 +3,13 @@
 # Użycie: SUDO_ASKPASS=~/bin/sudo-askpass sudo -A KOMENDA
 # Nic nie zapamiętuje (celowo nie KWallet: zapisane hasło = root dla każdego procesu użytkownika).
 prompt="${1:-Password for sudo:}"
+# pokaż, na co człowiek się zgadza: komenda procesu sudo, który wywołał to okno (z /proc, nie do podrobienia przez wywołującego)
+cmd=$(tr '\0' ' ' < "/proc/$PPID/cmdline" 2>/dev/null)
+[ -n "$cmd" ] && prompt="$prompt
+
+Command: $cmd
+
+Not expecting this? Click Cancel."
 if command -v kdialog >/dev/null 2>&1; then
   exec kdialog --title "sudo" --password "$prompt"
 elif command -v zenity >/dev/null 2>&1; then
