@@ -12,11 +12,13 @@ freecode to NAKŁADKA na niezmieniony opencode, nie fork: opencode aktualizuje s
 Dlaczego: opencode 2.x bez poprawnej konfiguracji (brak pliku, uszkodzony JSON, brak lokalnego
 `small_model`) po cichu wysyła rozmowę do darmowych modeli w chmurze. freecode przed każdym startem
 sprawdza wszystkie źródła konfiguracji i odmawia startu, jeśli którykolwiek dostawca nie jest lokalny.
-Potem uruchamia opencode z `--standalone` (własny serwer z właśnie sprawdzoną konfiguracją; usługa
-w tle trzyma konfigurację z chwili swojego startu) i z wyłączoną autoaktualizacją i pobieraniem
-listy modeli.
+TUI idzie przez usługę w tle (ta sama sesja w terminalu i w przeglądarce/telefonie). Usługa trzyma
+konfigurację z chwili swojego startu, więc gdy plik konfiguracji jest nowszy, freecode ją restartuje,
+a jeśli usługa właśnie liczy sesję, startuje prywatny serwer (`--standalone`). `run` zawsze idzie
+z `--standalone`. Autoaktualizacja i pobieranie listy modeli są wyłączone.
 
-Zmienne: FREECODE_HOSTS (dodatkowe dozwolone hosty, po przecinku, np. adres serwera w LAN),
+Zmienne: FREECODE_STANDALONE (TUI zawsze z prywatnym serwerem),
+FREECODE_HOSTS (dodatkowe dozwolone hosty, po przecinku, np. adres serwera w LAN),
 FREECODE_OPENCODE (ścieżka do opencode), FREECODE_URL + FREECODE_MODEL (konfigurator bez pytań),
 FREECODE_YES (konfigurator przyjmuje domyślne odpowiedzi).
 Zgodność wstecz: --konfiguruj, --sprawdz, FREECODE_HOSTY i FREECODE_TAK też działają.
@@ -307,6 +309,71 @@ def configure():
     mark_configured(); return 0
 
 
+# ── usługa w tle (TUI) ───────────────────────────────────────────────────────────────────────
+SERVICE_JSON = os.path.join(HOME, ".local", "state", "opencode", "service.json")
+
+
+def proc_start(pid):
+    """Czas startu procesu (epoch) z /proc; None, gdy procesu nie ma."""
+    try:
+        fields = open(f"/proc/{pid}/stat").read().rsplit(")", 1)[1].split()
+        btime = next(int(l.split()[1]) for l in open("/proc/stat") if l.startswith("btime "))
+        return btime + int(fields[19]) / os.sysconf("SC_CLK_TCK")
+    except (OSError, ValueError, IndexError, StopIteration):
+        return None
+
+
+def service_mode(oc, directory):
+    """Czy TUI może iść przez usługę w tle (jeden serwer dla terminala i telefonu).
+
+    Zwraca None (tak) albo powód, dla którego trzeba użyć `--standalone`. Usługa trzyma konfigurację
+    z chwili swojego startu: gdy którykolwiek plik konfiguracji jest nowszy, a usługa nic nie liczy,
+    restartujemy ją; gdy coś liczy (np. sesja z telefonu), nie przerywamy jej i startujemy prywatny serwer.
+    """
+    if os.environ.get("FREECODE_STANDALONE"):
+        return "FREECODE_STANDALONE"
+    env_cfg = [k for k in ("OPENCODE_CONFIG", "OPENCODE_CONFIG_CONTENT", "OPENCODE_CONFIG_DIR", "XDG_CONFIG_HOME")
+               if os.environ.get(k)]
+    if env_cfg:
+        return "konfiguracja ze zmiennych " + ", ".join(env_cfg) + " (usługa jej nie widzi)"
+    try:
+        svc = json.load(open(SERVICE_JSON, encoding="utf-8"))
+        pid = int(svc["pid"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return None                      # usługa nie działa — opencode postawi ją ze sprawdzoną konfiguracją
+    started = proc_start(pid)
+    if started is None:
+        return None
+    reasons = []
+    try:
+        env = dict(l.split("=", 1) for l in open(f"/proc/{pid}/environ").read().split("\0") if "=" in l)
+        reasons += [f"usługa ma {k}" for k in ("OPENCODE_CONFIG", "OPENCODE_CONFIG_CONTENT", "OPENCODE_CONFIG_DIR",
+                                                "XDG_CONFIG_HOME") if env.get(k)]
+    except OSError:
+        reasons.append("nie da się odczytać środowiska usługi")
+    reasons += [f"{p} zmieniony po starcie usługi" for p, content in sources(directory)
+                if content is None and os.path.getmtime(p) > started]
+    if not reasons:
+        return None
+    try:
+        import base64
+        auth = base64.b64encode(f"opencode:{svc['password']}".encode()).decode()
+        req = urllib.request.Request(svc["url"].rstrip("/") + "/api/session/active",
+                                     headers={"Authorization": "Basic " + auth})
+        with urllib.request.urlopen(req, timeout=3) as r:
+            busy = bool(json.load(r).get("data"))
+    except (OSError, ValueError, KeyError, AttributeError):
+        busy = True
+    if busy:
+        return "usługa ma nieaktualną konfigurację (" + "; ".join(reasons) + ") i liczy sesję — nie przerywam jej"
+    info(color(2, "freecode: restart usługi w tle (" + "; ".join(reasons) + ")"))
+    import subprocess
+    r = subprocess.run([oc, "service", "restart"], capture_output=True, text=True, timeout=60)
+    if r.returncode != 0:
+        return "restart usługi nie powiódł się: " + (r.stderr.strip() or r.stdout.strip())[:200]
+    return None
+
+
 # ── start ────────────────────────────────────────────────────────────────────────────────────
 def opencode_version(oc):
     """Wersja z package.json obok binarki (szybko), w razie czego `opencode --version`."""
@@ -369,7 +436,13 @@ def main(argv):
     info(color(2, describe(oc)))
     sub = argv[0] if argv and not argv[0].startswith("-") and not os.path.isdir(argv[0]) else None
     if sub is None:                       # TUI
-        args = [oc, "--standalone", *argv]
+        own = "--standalone" in argv or any(a == "--server" or a.startswith("--server=") for a in argv)
+        why = None if own else service_mode(oc, directory)
+        if own or why is None:
+            args = [oc, *argv]            # usługa w tle: ta sama sesja w terminalu i na telefonie
+        else:
+            info(color(33, f"freecode: prywatny serwer — {why}"))
+            args = [oc, "--standalone", *argv]
     elif sub == "run":
         args = [oc, "run", "--standalone", *argv[1:]]
     elif sub in ("upgrade", "update", "auth", "service", "acp"):
