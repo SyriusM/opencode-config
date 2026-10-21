@@ -1,0 +1,16 @@
+#!/bin/sh
+# Okno z hasłem dla `sudo -A` — agent (bez terminala) może użyć sudo, a hasło wpisuje człowiek.
+# Użycie: SUDO_ASKPASS=~/bin/sudo-askpass sudo -A KOMENDA
+# Nic nie zapamiętuje (celowo nie KWallet: zapisane hasło = root dla każdego procesu użytkownika).
+prompt="${1:-Password for sudo:}"
+if command -v kdialog >/dev/null 2>&1; then
+  exec kdialog --title "sudo" --password "$prompt"
+elif command -v zenity >/dev/null 2>&1; then
+  exec zenity --password --title "sudo"
+elif command -v ksshaskpass >/dev/null 2>&1; then
+  exec ksshaskpass "$prompt"
+elif command -v ssh-askpass >/dev/null 2>&1; then
+  exec ssh-askpass "$prompt"
+fi
+echo "sudo-askpass: no dialog program found (install kdialog, zenity or ssh-askpass)" >&2
+exit 1
