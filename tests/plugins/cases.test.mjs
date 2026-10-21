@@ -1,6 +1,7 @@
 // tool-input-fix against JSON case files. "@HOME@" in a case is replaced by the current home directory.
+// "requires_file": rule exists only on systems with that file (e.g. pacman); elsewhere the case expects null.
 // Usage: node --experimental-strip-types --no-warnings cases.test.mjs PLUGIN.ts CASES.json [CASES.json…]
-import { readFileSync } from "node:fs"
+import { existsSync, readFileSync } from "node:fs"
 import { homedir } from "node:os"
 const mod = await import(process.argv[2])
 const { fixCode, fixNames, fixMcp } = mod
@@ -32,8 +33,9 @@ for (const file of process.argv.slice(3)) {
     else if (c.type === "code") { result = structuredClone(c.input); const r = fixCode(result.code); result.code = fixNames(r.code).code }
     else if (c.type === "mcp") { result = structuredClone(c.input); fixMcp(c.tool, result) }
     else { failed++; console.log(`FAIL  unknown case type ${JSON.stringify(c.type)}`); continue }
-    const ok = c.expect_contains !== undefined ? String(result).includes(c.expect_contains) : JSON.stringify(result) === JSON.stringify(c.expect)
-    if (!ok) { failed++; console.log(`FAIL  ${c.desc ?? c.type}\n     input:    ${JSON.stringify(c.input)}\n     result:   ${JSON.stringify(result)}\n     expected: ${JSON.stringify(c.expect ?? c.expect_contains)}`) }
+    const expect = c.requires_file && !existsSync(c.requires_file) ? null : c.expect
+    const ok = c.expect_contains !== undefined ? String(result).includes(c.expect_contains) : JSON.stringify(result) === JSON.stringify(expect)
+    if (!ok) { failed++; console.log(`FAIL  ${c.desc ?? c.type}\n     input:    ${JSON.stringify(c.input)}\n     result:   ${JSON.stringify(result)}\n     expected: ${JSON.stringify(c.expect_contains ?? expect)}`) }
   }
 }
 console.log(failed ? `FAILED: ${failed} of ${total}` : `OK: all ${total} cases passed`)

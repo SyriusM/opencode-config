@@ -336,6 +336,7 @@
   "input": {
    "command": "apt install ripgrep"
   },
+  "requires_file": "/usr/bin/pacman",
   "expect": "apt"
  },
  {
