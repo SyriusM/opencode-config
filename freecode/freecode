@@ -2,8 +2,8 @@
 """freecode — opencode tylko na lokalnych modelach.
 
   freecode [argumenty opencode]   sprawdza konfigurację i uruchamia opencode (TUI albo `run`)
-  freecode --konfiguruj           konfigurator (sam odpala się tylko raz, przy pierwszym starcie)
-  freecode --sprawdz              tylko kontrola konfiguracji (kod 0 = można startować)
+  freecode --configure           konfigurator (sam odpala się tylko raz, przy pierwszym starcie)
+  freecode --check                tylko kontrola konfiguracji (kod 0 = można startować)
   freecode --version              wersja freecode i opencode pod spodem
 
 freecode to NAKŁADKA na niezmieniony opencode, nie fork: opencode aktualizuje się normalnie
@@ -16,8 +16,10 @@ Potem uruchamia opencode z `--standalone` (własny serwer z właśnie sprawdzon�
 w tle trzyma konfigurację z chwili swojego startu) i z wyłączoną autoaktualizacją i pobieraniem
 listy modeli.
 
-Zmienne: FREECODE_HOSTY (dodatkowe dozwolone hosty, po przecinku, np. adres serwera w LAN),
-FREECODE_OPENCODE (ścieżka do opencode), FREECODE_URL + FREECODE_MODEL (konfigurator bez pytań).
+Zmienne: FREECODE_HOSTS (dodatkowe dozwolone hosty, po przecinku, np. adres serwera w LAN),
+FREECODE_OPENCODE (ścieżka do opencode), FREECODE_URL + FREECODE_MODEL (konfigurator bez pytań),
+FREECODE_YES (konfigurator przyjmuje domyślne odpowiedzi).
+Zgodność wstecz: --konfiguruj, --sprawdz, FREECODE_HOSTY i FREECODE_TAK też działają.
 """
 import ipaddress
 import json
@@ -28,18 +30,19 @@ import time
 import urllib.parse
 import urllib.request
 
-WERSJA = "0.1"
+VERSION = "0.1"
 HOME = os.path.expanduser("~")
 XDG = os.environ.get("XDG_CONFIG_HOME") or os.path.join(HOME, ".config")
 OC_DIR = os.environ.get("OPENCODE_CONFIG_DIR") or os.path.join(XDG, "opencode")
 FC_DIR = os.path.join(XDG, "freecode")
-ZNACZNIK = os.path.join(FC_DIR, "skonfigurowane")
-NAZWY = ("opencode.jsonc", "opencode.json", "config.json")
+MARKER = os.path.join(FC_DIR, "configured")
+OLD_MARKER = os.path.join(FC_DIR, "skonfigurowane")  # before 2026-10-21
+CONFIG_NAMES = ("opencode.jsonc", "opencode.json", "config.json")
 # standardowe porty lokalnych serwerów modeli
-SERWERY = [("llama.cpp", 8080), ("Ollama", 11434), ("LM Studio", 1234), ("vLLM", 8000)]
+SERVERS = [("llama.cpp", 8080), ("Ollama", 11434), ("LM Studio", 1234), ("vLLM", 8000)]
 
 
-def kolor(k, s):
+def color(k, s):
     return f"\033[{k}m{s}\033[0m" if sys.stderr.isatty() else s
 
 
@@ -48,24 +51,24 @@ def info(s):
 
 
 # ── JSONC: komentarze // i /* */ oraz przecinki na końcu, poza stringami ──────────────────────
-def jsonc(tekst):
-    out, i, n, w_str = [], 0, len(tekst), False
+def jsonc(text):
+    out, i, n, in_str = [], 0, len(text), False
     while i < n:
-        c = tekst[i]
-        if w_str:
+        c = text[i]
+        if in_str:
             out.append(c)
             if c == "\\" and i + 1 < n:
-                out.append(tekst[i + 1]); i += 1
+                out.append(text[i + 1]); i += 1
             elif c == '"':
-                w_str = False
+                in_str = False
         elif c == '"':
-            w_str = True; out.append(c)
-        elif tekst.startswith("//", i):
-            while i < n and tekst[i] != "\n":
+            in_str = True; out.append(c)
+        elif text.startswith("//", i):
+            while i < n and text[i] != "\n":
                 i += 1
             continue
-        elif tekst.startswith("/*", i):
-            j = tekst.find("*/", i + 2)
+        elif text.startswith("/*", i):
+            j = text.find("*/", i + 2)
             i = n if j < 0 else j + 2
             continue
         else:
@@ -73,59 +76,60 @@ def jsonc(tekst):
         i += 1
     s = "".join(out)
     # przecinek przed } albo ] (poza stringami — stringi już nie zawierają komentarzy, ale mogą zawierać ",}")
-    wynik, w_str, i = [], False, 0
+    result, in_str, i = [], False, 0
     while i < len(s):
         c = s[i]
-        if w_str:
-            wynik.append(c)
+        if in_str:
+            result.append(c)
             if c == "\\" and i + 1 < len(s):
-                wynik.append(s[i + 1]); i += 1
+                result.append(s[i + 1]); i += 1
             elif c == '"':
-                w_str = False
+                in_str = False
         elif c == '"':
-            w_str = True; wynik.append(c)
+            in_str = True; result.append(c)
         elif c == ",":
             j = i + 1
             while j < len(s) and s[j] in " \t\r\n":
                 j += 1
             if j >= len(s) or s[j] not in "}]":
-                wynik.append(c)
+                result.append(c)
         else:
-            wynik.append(c)
+            result.append(c)
         i += 1
-    return json.loads("".join(wynik))
+    return json.loads("".join(result))
 
 
 # ── źródła konfiguracji, w kolejności nakładania ─────────────────────────────────────────────
-def zrodla(katalog):
-    lista = [os.path.join(OC_DIR, n) for n in NAZWY]
+def sources(directory):
+    paths = [os.path.join(OC_DIR, n) for n in CONFIG_NAMES]
     if os.environ.get("OPENCODE_CONFIG"):
-        lista.append(os.environ["OPENCODE_CONFIG"])
+        paths.append(os.environ["OPENCODE_CONFIG"])
     if not os.environ.get("OPENCODE_DISABLE_PROJECT_CONFIG"):
         # pliki projektu: od katalogu startu w górę do korzenia repozytorium git (albo katalogu domowego)
-        projekt, d = [], os.path.abspath(katalog)
+        project, d = [], os.path.abspath(directory)
         while True:
             for n in ("opencode.jsonc", "opencode.json", ".opencode/opencode.jsonc", ".opencode/opencode.json"):
                 p = os.path.join(d, n)
                 if os.path.abspath(os.path.dirname(p)) != os.path.abspath(OC_DIR):
-                    projekt.append(p)
+                    project.append(p)
             if os.path.exists(os.path.join(d, ".git")) or d in (HOME, "/"):
                 break
             d = os.path.dirname(d)
-        lista += reversed(projekt)
-    pliki = [(p, None) for p in lista if os.path.isfile(p)]
+        paths += reversed(project)
+    files = [(p, None) for p in paths if os.path.isfile(p)]
     if os.environ.get("OPENCODE_CONFIG_CONTENT"):
-        pliki.append(("$OPENCODE_CONFIG_CONTENT", os.environ["OPENCODE_CONFIG_CONTENT"]))
-    return pliki
+        files.append(("$OPENCODE_CONFIG_CONTENT", os.environ["OPENCODE_CONFIG_CONTENT"]))
+    return files
 
 
-def lokalny(url):
+def is_local(url):
     try:
         host = urllib.parse.urlparse(url).hostname or ""
     except ValueError:
         return False
-    dodatkowe = [h.strip() for h in os.environ.get("FREECODE_HOSTY", "").split(",") if h.strip()]
-    if host == "localhost" or host in dodatkowe:
+    hosts = os.environ.get("FREECODE_HOSTS") or os.environ.get("FREECODE_HOSTY") or ""
+    extra = [h.strip() for h in hosts.split(",") if h.strip()]
+    if host == "localhost" or host in extra:
         return True
     try:
         return ipaddress.ip_address(host).is_loopback
@@ -133,72 +137,72 @@ def lokalny(url):
         return False
 
 
-def dostawca(model):
+def provider_of(model):
     return model.split("/", 1)[0] if isinstance(model, str) and "/" in model else None
 
 
-def sprawdz(katalog="."):
+def check(directory="."):
     """Zwraca (problemy, połączona konfiguracja, główny plik). Pusta lista problemów = można startować."""
-    problemy, polaczona, dostawcy = [], {}, {}
-    pliki = zrodla(katalog)
-    if not pliki:
-        return ["brak konfiguracji opencode (uruchom: freecode --konfiguruj)"], {}, None
-    for sciezka, tresc in pliki:
+    problems, merged, providers = [], {}, {}
+    files = sources(directory)
+    if not files:
+        return ["brak konfiguracji opencode (uruchom: freecode --configure)"], {}, None
+    for file_path, content in files:
         try:
-            c = jsonc(tresc if tresc is not None else open(sciezka, encoding="utf-8").read())
+            c = jsonc(content if content is not None else open(file_path, encoding="utf-8").read())
             if not isinstance(c, dict):
                 raise ValueError("to nie jest obiekt JSON")
         except (ValueError, OSError) as e:
-            problemy.append(f"{sciezka}: nie da się odczytać ({e})")
+            problems.append(f"{file_path}: nie da się odczytać ({e})")
             continue
         for k, v in c.items():
             if k == "provider" and isinstance(v, dict):
                 for pid, p in v.items():
-                    dostawcy.setdefault(pid, {}).update(p if isinstance(p, dict) else {})
+                    providers.setdefault(pid, {}).update(p if isinstance(p, dict) else {})
             elif k == "agent" and isinstance(v, dict):
                 for a, cfg in v.items():
-                    polaczona.setdefault("agent", {}).setdefault(a, {}).update(cfg if isinstance(cfg, dict) else {})
+                    merged.setdefault("agent", {}).setdefault(a, {}).update(cfg if isinstance(cfg, dict) else {})
             else:
-                polaczona[k] = v
-    if problemy:
-        return problemy, polaczona, pliki[0][0]
-    polaczona["provider"] = dostawcy
+                merged[k] = v
+    if problems:
+        return problems, merged, files[0][0]
+    merged["provider"] = providers
 
-    wlaczeni = polaczona.get("enabled_providers")
-    if not isinstance(wlaczeni, list) or not wlaczeni:
-        problemy.append("brak `enabled_providers` — bez tej listy opencode może użyć dostawców w chmurze")
-        wlaczeni = []
-    for pid in wlaczeni:
-        url = ((dostawcy.get(pid) or {}).get("options") or {}).get("baseURL")
+    enabled = merged.get("enabled_providers")
+    if not isinstance(enabled, list) or not enabled:
+        problems.append("brak `enabled_providers` — bez tej listy opencode może użyć dostawców w chmurze")
+        enabled = []
+    for pid in enabled:
+        url = ((providers.get(pid) or {}).get("options") or {}).get("baseURL")
         if not url:
-            problemy.append(f"dostawca `{pid}` nie ma `options.baseURL` — nie wiadomo, czy jest lokalny")
-        elif not lokalny(url):
-            problemy.append(f"dostawca `{pid}` nie jest lokalny ({url}); dozwolone: localhost, 127.0.0.0/8, ::1, FREECODE_HOSTY")
-    modele = [("model", polaczona.get("model")), ("small_model", polaczona.get("small_model"))]
-    modele += [(f"agent.{a}.model", cfg.get("model")) for a, cfg in (polaczona.get("agent") or {}).items() if cfg.get("model")]
-    for nazwa, m in modele:
+            problems.append(f"dostawca `{pid}` nie ma `options.baseURL` — nie wiadomo, czy jest lokalny")
+        elif not is_local(url):
+            problems.append(f"dostawca `{pid}` nie jest lokalny ({url}); dozwolone: localhost, 127.0.0.0/8, ::1, FREECODE_HOSTS")
+    models = [("model", merged.get("model")), ("small_model", merged.get("small_model"))]
+    models += [(f"agent.{a}.model", cfg.get("model")) for a, cfg in (merged.get("agent") or {}).items() if cfg.get("model")]
+    for name, m in models:
         if not m:
-            problemy.append(f"brak `{nazwa}` — opencode dobierze model sam, także z chmury"
-                            + (" (small_model służy m.in. do tytułów sesji)" if nazwa == "small_model" else ""))
-        elif dostawca(m) not in wlaczeni:
-            problemy.append(f"`{nazwa}` = {m}: dostawca spoza `enabled_providers`")
-    return problemy, polaczona, pliki[0][0]
+            problems.append(f"brak `{name}` — opencode dobierze model sam, także z chmury"
+                            + (" (small_model służy m.in. do tytułów sesji)" if name == "small_model" else ""))
+        elif provider_of(m) not in enabled:
+            problems.append(f"`{name}` = {m}: dostawca spoza `enabled_providers`")
+    return problems, merged, files[0][0]
 
 
 # ── konfigurator ─────────────────────────────────────────────────────────────────────────────
-def tty_input(pytanie, domyslna=""):
-    if os.environ.get("FREECODE_TAK") or not os.path.exists("/dev/tty"):
-        return domyslna
+def tty_input(question, default=""):
+    if os.environ.get("FREECODE_YES") or os.environ.get("FREECODE_TAK") or not os.path.exists("/dev/tty"):
+        return default
     try:
         with open("/dev/tty", "r+") as t:
-            t.write(f"  {pytanie} [{domyslna}]: "); t.flush()
-            odp = t.readline().strip()
+            t.write(f"  {question} [{default}]: "); t.flush()
+            answer = t.readline().strip()
     except OSError:
-        return domyslna
-    return odp or domyslna
+        return default
+    return answer or default
 
 
-def modele_serwera(url):
+def server_models(url):
     try:
         with urllib.request.urlopen(url.rstrip("/") + "/models", timeout=3) as r:
             d = json.load(r)
@@ -207,86 +211,86 @@ def modele_serwera(url):
         return None
 
 
-def zapisz(sciezka, dane):
-    os.makedirs(os.path.dirname(sciezka), exist_ok=True)
-    if os.path.exists(sciezka):
-        kopia = f"{sciezka}.bak-{time.strftime('%Y%m%d-%H%M%S')}"
-        shutil.copy2(sciezka, kopia)
-        info(f"  kopia: {kopia}")
-    tmp = sciezka + ".tmp"
+def save(file_path, data):
+    os.makedirs(os.path.dirname(file_path), exist_ok=True)
+    if os.path.exists(file_path):
+        backup = f"{file_path}.bak-{time.strftime('%Y%m%d-%H%M%S')}"
+        shutil.copy2(file_path, backup)
+        info(f"  kopia: {backup}")
+    tmp = file_path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(dane, f, indent=2, ensure_ascii=False)
+        json.dump(data, f, indent=2, ensure_ascii=False)
         f.write("\n")
-    os.replace(tmp, sciezka)
-    info(kolor(32, f"  zapisano {sciezka}"))
+    os.replace(tmp, file_path)
+    info(color(32, f"  zapisano {file_path}"))
 
 
-def oznacz():
+def mark_configured():
     os.makedirs(FC_DIR, exist_ok=True)
-    with open(ZNACZNIK, "w") as f:
+    with open(MARKER, "w") as f:
         f.write(time.strftime("%Y-%m-%d %H:%M:%S\n"))
 
 
-def konfiguruj():
-    info("freecode — konfiguracja (jednorazowa; ponownie: freecode --konfiguruj)")
-    globalny = next((os.path.join(OC_DIR, n) for n in NAZWY if os.path.isfile(os.path.join(OC_DIR, n))), None)
+def configure():
+    info("freecode — konfiguracja (jednorazowa; ponownie: freecode --configure)")
+    global_file = next((os.path.join(OC_DIR, n) for n in CONFIG_NAMES if os.path.isfile(os.path.join(OC_DIR, n))), None)
 
-    if globalny:
-        problemy, _, _ = sprawdz(HOME)
-        if not problemy:
-            info(kolor(32, f"  {globalny}: wszyscy dostawcy lokalni, nic do zmiany")); oznacz(); return 0
+    if global_file:
+        problems, _, _ = check(HOME)
+        if not problems:
+            info(color(32, f"  {global_file}: wszyscy dostawcy lokalni, nic do zmiany")); mark_configured(); return 0
         try:
-            c = jsonc(open(globalny, encoding="utf-8").read())
+            c = jsonc(open(global_file, encoding="utf-8").read())
         except ValueError as e:
-            info(kolor(31, f"  {globalny} jest uszkodzony ({e}) — popraw go ręcznie")); return 1
-        lokalni = [pid for pid, p in (c.get("provider") or {}).items()
-                   if lokalny(((p or {}).get("options") or {}).get("baseURL") or "")]
-        zmiany = {}
-        if not c.get("enabled_providers") and lokalni:
-            zmiany["enabled_providers"] = lokalni
-        if not c.get("small_model") and dostawca(c.get("model")) in (zmiany.get("enabled_providers") or c.get("enabled_providers") or []):
-            zmiany["small_model"] = c["model"]
-        if zmiany:
-            info(f"  {globalny} — proponowane uzupełnienie:")
-            for k, v in zmiany.items():
+            info(color(31, f"  {global_file} jest uszkodzony ({e}) — popraw go ręcznie")); return 1
+        local_ids = [pid for pid, p in (c.get("provider") or {}).items()
+                   if is_local(((p or {}).get("options") or {}).get("baseURL") or "")]
+        changes = {}
+        if not c.get("enabled_providers") and local_ids:
+            changes["enabled_providers"] = local_ids
+        if not c.get("small_model") and provider_of(c.get("model")) in (changes.get("enabled_providers") or c.get("enabled_providers") or []):
+            changes["small_model"] = c["model"]
+        if changes:
+            info(f"  {global_file} — proponowane uzupełnienie:")
+            for k, v in changes.items():
                 info(f"    \"{k}\": {json.dumps(v, ensure_ascii=False)}")
-            if globalny.endswith(".jsonc"):
+            if global_file.endswith(".jsonc"):
                 info("  (plik .jsonc — zapis usunie komentarze)")
             if tty_input("Zapisać? (t/n)", "t").lower().startswith(("t", "y")):
-                c.update(zmiany); zapisz(globalny, c)
-        problemy, _, _ = sprawdz(HOME)
-        for p in problemy:
-            info(kolor(33, f"  ! {p}"))
-        if problemy:
-            info("  Popraw powyższe ręcznie i uruchom: freecode --sprawdz"); return 1
-        oznacz(); return 0
+                c.update(changes); save(global_file, c)
+        problems, _, _ = check(HOME)
+        for p in problems:
+            info(color(33, f"  ! {p}"))
+        if problems:
+            info("  Popraw powyższe ręcznie i uruchom: freecode --check"); return 1
+        mark_configured(); return 0
 
     # brak konfiguracji — wykrycie lokalnego serwera
     url, model = os.environ.get("FREECODE_URL"), os.environ.get("FREECODE_MODEL")
     if not url:
-        for nazwa, port in SERWERY:
+        for name, port in SERVERS:
             u = f"http://127.0.0.1:{port}/v1"
-            m = modele_serwera(u)
+            m = server_models(u)
             if m:
-                info(kolor(32, f"  znaleziono {nazwa} na :{port} ({len(m)} modeli)")); url = u; break
+                info(color(32, f"  znaleziono {name} na :{port} ({len(m)} modeli)")); url = u; break
     if not url:
         url = tty_input("Nie znaleziono lokalnego serwera modeli. Adres API zgodnego z OpenAI", "")
     if not url:
-        info(kolor(31, "  brak serwera modeli — uruchom llama.cpp / Ollama / LM Studio i powtórz: freecode --konfiguruj")); return 1
-    if not lokalny(url):
-        info(kolor(31, f"  {url} nie jest lokalny (dodaj host do FREECODE_HOSTY, jeśli to twój serwer w LAN)")); return 1
-    dostepne = modele_serwera(url) or []
+        info(color(31, "  brak serwera modeli — uruchom llama.cpp / Ollama / LM Studio i powtórz: freecode --configure")); return 1
+    if not is_local(url):
+        info(color(31, f"  {url} nie jest lokalny (dodaj host do FREECODE_HOSTS, jeśli to twój serwer w LAN)")); return 1
+    available = server_models(url) or []
     if not model:
-        if dostepne:
-            for i, m in enumerate(dostepne, 1):
+        if available:
+            for i, m in enumerate(available, 1):
                 info(f"    {i}. {m}")
-            wybor = tty_input("Model (numer albo nazwa)", "1")
-            model = dostepne[int(wybor) - 1] if wybor.isdigit() and 0 < int(wybor) <= len(dostepne) else wybor
+            choice = tty_input("Model (numer albo nazwa)", "1")
+            model = available[int(choice) - 1] if choice.isdigit() and 0 < int(choice) <= len(available) else choice
         else:
             model = tty_input("Serwer nie podał listy modeli. Nazwa modelu", "")
     if not model:
-        info(kolor(31, "  nie wybrano modelu")); return 1
-    zapisz(os.path.join(OC_DIR, "opencode.json"), {
+        info(color(31, "  nie wybrano modelu")); return 1
+    save(os.path.join(OC_DIR, "opencode.json"), {
         "$schema": "https://opencode.ai/config.json",
         "enabled_providers": ["local"],
         "model": f"local/{model}",
@@ -295,16 +299,16 @@ def konfiguruj():
         "provider": {"local": {"npm": "@ai-sdk/openai-compatible", "options": {"baseURL": url},
                                "models": {model: {"name": f"{model} (lokalnie)"}}}},
     })
-    problemy, _, _ = sprawdz(HOME)
-    for p in problemy:
-        info(kolor(33, f"  ! {p}"))
-    if problemy:
+    problems, _, _ = check(HOME)
+    for p in problems:
+        info(color(33, f"  ! {p}"))
+    if problems:
         return 1
-    oznacz(); return 0
+    mark_configured(); return 0
 
 
 # ── start ────────────────────────────────────────────────────────────────────────────────────
-def wersja_opencode(oc):
+def opencode_version(oc):
     """Wersja z package.json obok binarki (szybko), w razie czego `opencode --version`."""
     d = os.path.dirname(os.path.realpath(oc))
     for _ in range(4):
@@ -325,42 +329,44 @@ def wersja_opencode(oc):
         return "?"
 
 
-def opis(oc):
-    return f"freecode {WERSJA} — nakładka na opencode {wersja_opencode(oc) if oc else '(nie znaleziono)'}, tylko lokalne modele"
+def describe(oc):
+    return f"freecode {VERSION} — nakładka na opencode {opencode_version(oc) if oc else '(nie znaleziono)'}, tylko lokalne modele"
 
 
 def main(argv):
     if argv[:1] in (["-h"], ["--help"]):
         print(__doc__.strip()); return 0
     if argv[:1] in (["-v"], ["--version"]):
-        print(opis(os.environ.get("FREECODE_OPENCODE") or shutil.which("opencode"))); return 0
-    if argv[:1] == ["--konfiguruj"]:
-        return konfiguruj()
-    if not os.path.exists(ZNACZNIK) and argv[:1] != ["--sprawdz"]:
-        kod = konfiguruj()
-        if kod:
-            return kod
+        print(describe(os.environ.get("FREECODE_OPENCODE") or shutil.which("opencode"))); return 0
+    # old Polish flags stay as aliases
+    argv = [{"--konfiguruj": "--configure", "--sprawdz": "--check"}.get(a, a) for a in argv[:1]] + argv[1:]
+    if argv[:1] == ["--configure"]:
+        return configure()
+    if not os.path.exists(MARKER) and not os.path.exists(OLD_MARKER) and argv[:1] != ["--check"]:
+        code = configure()
+        if code:
+            return code
 
     # katalog projektu: pierwszy argument niebędący flagą (TUI: `freecode katalog`)
-    katalog = "."
+    directory = "."
     if argv and not argv[0].startswith("-") and os.path.isdir(argv[0]):
-        katalog = argv[0]
-    problemy, _, _ = sprawdz(katalog)
-    if problemy:
-        info(kolor(31, "freecode: nie uruchamiam opencode — konfiguracja nie jest w pełni lokalna:"))
-        for p in problemy:
+        directory = argv[0]
+    problems, _, _ = check(directory)
+    if problems:
+        info(color(31, "freecode: nie uruchamiam opencode — konfiguracja nie jest w pełni lokalna:"))
+        for p in problems:
             info(f"  - {p}")
-        info("Popraw konfigurację albo uruchom: freecode --konfiguruj")
+        info("Popraw konfigurację albo uruchom: freecode --configure")
         return 1
-    if argv[:1] == ["--sprawdz"]:
-        info(kolor(32, "freecode: konfiguracja lokalna")); return 0
+    if argv[:1] == ["--check"]:
+        info(color(32, "freecode: konfiguracja lokalna")); return 0
 
     oc = os.environ.get("FREECODE_OPENCODE") or shutil.which("opencode")
     if not oc:
         info("freecode: nie znaleziono opencode (npm i -g @opencode/cli)"); return 1
     os.environ["OPENCODE_DISABLE_AUTOUPDATE"] = "1"
     os.environ["OPENCODE_DISABLE_MODELS_FETCH"] = "1"
-    info(kolor(2, opis(oc)))
+    info(color(2, describe(oc)))
     sub = argv[0] if argv and not argv[0].startswith("-") and not os.path.isdir(argv[0]) else None
     if sub is None:                       # TUI
         args = [oc, "--standalone", *argv]

@@ -19,16 +19,19 @@ jobs:
           python-version: "3.12"
 
       - name: shellcheck
-        run: shellcheck -S warning install.sh tests/e2e.sh
+        run: shellcheck -S warning install.sh tests/e2e.sh tests/plugins/run.sh
 
-      - name: składnia wtyczek (esbuild)
+      - name: plugin syntax (esbuild)
         run: for f in plugins/*/index.ts; do npx -y esbuild "$f" --log-level=error --outfile=/dev/null || exit 1; done
 
-      - name: składnia skryptów Pythona
-        run: for f in bin/lesson-note bin/palace-context freecode/freecode freecode/przemianuj tests/mock_llm.py; do python3 -c "import ast, sys; ast.parse(open(sys.argv[1]).read())" "$f" || exit 1; done
+      - name: Python script syntax
+        run: for f in bin/lesson-note bin/palace-context freecode/freecode freecode/rebrand tests/mock_llm.py; do python3 -c "import ast, sys; ast.parse(open(sys.argv[1]).read())" "$f" || exit 1; done
+
+      - name: plugin behaviour tests
+        run: tests/plugins/run.sh
 
       - name: opencode 2.0.24
         run: npm i -g @opencode/cli@2.0.24 && opencode --version
 
-      - name: instalacja, sesja na atrapie modelu, deinstalacja
+      - name: install, session on a mock model, uninstall
         run: tests/e2e.sh

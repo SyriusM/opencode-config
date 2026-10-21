@@ -3,15 +3,16 @@
 (wing opencode, room bledy) — wnioski modeli nie mieszają się z osobistą pamięcią użytkownika w ~/.mempalace.
 
   lesson-note                                   ile wniosków i ostatnie 5
-  lesson-note szukaj "komunikat albo słowa"     znane rozwiązania (dokładne słowa w plikach + podobne w mempalace)
-  lesson-note dodaj "OBJAW" "PRZYCZYNA" "NAPRAWA" ["PRZYKŁAD poprawnego wywołania"]
+  lesson-note search "komunikat albo słowa"     znane rozwiązania (dokładne słowa w plikach + podobne w mempalace)
+  lesson-note add "OBJAW" "PRZYCZYNA" "NAPRAWA" ["PRZYKŁAD poprawnego wywołania"]
         OBJAW     = komunikat błędu albo co się działo (dosłownie, krótko)
         PRZYCZYNA = dlaczego (jedno zdanie)
         NAPRAWA   = co zmieniono i gdzie (plik, reguła) albo jak to obejść
-  lesson-note uzupelnij                         dopisz do mempalace wnioski, które są tylko w plikach
+  lesson-note backfill                          dopisz do mempalace wnioski, które są tylko w plikach
+Zgodność wstecz: szukaj = search, dodaj = add, uzupelnij = backfill.
 
 Zabezpieczenia: najwyżej 15 nowych wniosków dziennie; w trakcie miningu pałacu zapis idzie tylko do pliku
-(potem `uzupelnij`); plik jest źródłem prawdy — przerwany zapis do pałacu niczego nie gubi.
+(potem `backfill`); plik jest źródłem prawdy — przerwany zapis do pałacu niczego nie gubi.
 """
 import datetime, os, re, sys, contextlib, io, sqlite3, subprocess
 
@@ -20,32 +21,32 @@ os.environ["MEMPALACE_CONFIG_DIR"] = os.path.expanduser("~/.mempalace-opencode")
 os.environ.pop("MEMPALACE_PALACE_PATH", None)
 os.environ.pop("MEMPAL_PALACE_PATH", None)
 
-KOPALNIA = os.path.expanduser("~/oc-audyt/kopalnia")
+LESSONS_DIR = os.path.expanduser("~/oc-audyt/kopalnia")
 WING, ROOM = "opencode", "bledy"
 
 
-def cicho(f, *a, **k):
+def quiet(f, *a, **k):
     """mempalace wypisuje ostrzeżenia telemetrii na stderr — nie zaśmiecaj nimi wyniku"""
     with contextlib.redirect_stderr(io.StringIO()), contextlib.redirect_stdout(io.StringIO()):
         return f(*a, **k)
 
 
-def pliki():
-    os.makedirs(KOPALNIA, exist_ok=True)
-    return sorted(f for f in os.listdir(KOPALNIA) if f.endswith(".md"))
+def lesson_files():
+    os.makedirs(LESSONS_DIR, exist_ok=True)
+    return sorted(f for f in os.listdir(LESSONS_DIR) if f.endswith(".md"))
 
 
-def skrot(t, n=110):
+def shorten(t, n=110):
     t = " ".join(t.split())
     return t if len(t) <= n else t[: n - 1] + "…"
 
 
-LIMIT_DZIENNY = 15
-PROG = 0.55  # minimalne podobieństwo dla trafienia samym znaczeniem (zmierzone: trafne 0,56–0,74, luźne ~0,50–0,53, obce ~0,3)
-BAZA = os.path.expanduser("~/.mempalace-opencode/palace/chroma.sqlite3")
+DAILY_LIMIT = 15
+THRESHOLD = 0.55  # minimalne podobieństwo dla trafienia samym znaczeniem (zmierzone: trafne 0,56–0,74, luźne ~0,50–0,53, obce ~0,3)
+PALACE_DB = os.path.expanduser("~/.mempalace-opencode/palace/chroma.sqlite3")
 
 
-def trwa_mining():
+def mining_running():
     """Ciężki zapis do pałacu z innego procesu (mining) — wtedy nie dokładamy własnych zapisów."""
     try:
         r = subprocess.run(["pgrep", "-af", "mempalace mine|mine_case"], capture_output=True, text=True)
@@ -54,122 +55,123 @@ def trwa_mining():
         return False
 
 
-def w_palacu():
+def in_palace():
     """Nazwy plików kopalni, które mają już wpis w mempalace (odczyt bazy tylko do odczytu)."""
-    if not os.path.exists(BAZA):
+    if not os.path.exists(PALACE_DB):
         return set()  # pałac jeszcze nie założony — żaden wniosek nie ma wpisu
     try:
-        db = sqlite3.connect(f"file:{BAZA}?mode=ro", uri=True)
+        db = sqlite3.connect(f"file:{PALACE_DB}?mode=ro", uri=True)
         return {os.path.basename(r[0]) for r in db.execute(
             "select string_value from embedding_metadata where key='source_file' and string_value like '%oc-audyt/kopalnia%'")}
     except Exception:
         return None
 
 
-def do_palacu(plik, tresc):
-    if trwa_mining():
-        return "trwa mining pałacu — wniosek tylko w pliku (później: lesson-note uzupelnij)"
+def to_palace(file_path, content):
+    if mining_running():
+        return "trwa mining pałacu — wniosek tylko w pliku (później: lesson-note backfill)"
     try:
         from mempalace import mcp_server as m
-        r = cicho(m.tool_add_drawer, wing=WING, room=ROOM, content=tresc, added_by="lesson-note", source_file=plik)
+        r = quiet(m.tool_add_drawer, wing=WING, room=ROOM, content=content, added_by="lesson-note", source_file=file_path)
         return "zapisano w pałacu opencode" if isinstance(r, dict) and r.get("success") else f"mempalace: {str(r)[:120]}"
     except Exception as e:  # plik i tak został — pałac można uzupełnić później
-        return f"mempalace niedostępny ({type(e).__name__}); wniosek jest w pliku (później: lesson-note uzupelnij)"
+        return f"mempalace niedostępny ({type(e).__name__}); wniosek jest w pliku (później: lesson-note backfill)"
 
 
-def uzupelnij():
-    ma = w_palacu()
-    if ma is None:
+def backfill():
+    have = in_palace()
+    if have is None:
         sys.exit("Nie mogę odczytać bazy pałacu.")
-    brak = [f for f in pliki() if f not in ma]
-    if not brak:
-        print(f"Wszystkie wnioski ({len(pliki())}) są w mempalace.")
+    missing = [f for f in lesson_files() if f not in have]
+    if not missing:
+        print(f"Wszystkie wnioski ({len(lesson_files())}) są w mempalace.")
         return
-    for f in brak:
-        sciezka = os.path.join(KOPALNIA, f)
-        print(f"{f[:60]} — {do_palacu(sciezka, open(sciezka, encoding='utf-8').read())}")
+    for f in missing:
+        path = os.path.join(LESSONS_DIR, f)
+        print(f"{f[:60]} — {to_palace(path, open(path, encoding='utf-8').read())}")
 
 
-def dodaj(objaw, przyczyna, naprawa, przyklad=""):
-    objaw, przyczyna, naprawa, przyklad = (" ".join(x.split()) for x in (objaw, przyczyna, naprawa, przyklad))
-    if min(len(objaw), len(przyczyna), len(naprawa)) < 8:
+def add(symptom, cause, fix, example=""):
+    symptom, cause, fix, example = (" ".join(x.split()) for x in (symptom, cause, fix, example))
+    if min(len(symptom), len(cause), len(fix)) < 8:
         sys.exit("Każde z pól OBJAW, PRZYCZYNA, NAPRAWA musi mieć treść (min. 8 znaków).")
-    for f in pliki():
-        if objaw.lower() in open(os.path.join(KOPALNIA, f), encoding="utf-8").read().lower():
+    for f in lesson_files():
+        if symptom.lower() in open(os.path.join(LESSONS_DIR, f), encoding="utf-8").read().lower():
             print(f"Taki objaw już jest w kopalni: {f}")
             return
-    dzis = datetime.date.today().isoformat()
-    if os.environ.get("OC_WNIOSEK_ZASILANIE") != "1" and sum(1 for f in pliki() if f.startswith(dzis)) >= LIMIT_DZIENNY:
-        sys.exit(f"Limit {LIMIT_DZIENNY} nowych wniosków dziennie wyczerpany. Dopisz jutro albo połącz podobne wnioski w jeden.")
-    nazwa = re.sub(r"[^a-z0-9]+", "-", objaw.lower().translate(str.maketrans("ąćęłńóśźż", "acelnoszz")))[:50].strip("-") or "wniosek"
-    plik = os.path.join(KOPALNIA, f"{dzis}-{nazwa}.md")
-    tresc = f"# Błąd opencode i rozwiązanie ({dzis})\n\nOBJAW: {objaw}\nPRZYCZYNA: {przyczyna}\nNAPRAWA: {naprawa}\n"
-    if przyklad:
-        tresc += f"PRZYKŁAD: {przyklad}\n"
-    with open(plik, "w", encoding="utf-8") as f:
-        f.write(tresc)
-    stan = do_palacu(plik, tresc)
-    print(f"Dodano: {os.path.basename(plik)} — {stan}")
+    today = datetime.date.today().isoformat()
+    bulk = os.environ.get("OC_LESSON_BULK") or os.environ.get("OC_WNIOSEK_ZASILANIE")  # old name kept
+    if bulk != "1" and sum(1 for f in lesson_files() if f.startswith(today)) >= DAILY_LIMIT:
+        sys.exit(f"Limit {DAILY_LIMIT} nowych wniosków dziennie wyczerpany. Dopisz jutro albo połącz podobne wnioski w jeden.")
+    name = re.sub(r"[^a-z0-9]+", "-", symptom.lower().translate(str.maketrans("ąćęłńóśźż", "acelnoszz")))[:50].strip("-") or "wniosek"
+    file_path = os.path.join(LESSONS_DIR, f"{today}-{name}.md")
+    content = f"# Błąd opencode i rozwiązanie ({today})\n\nOBJAW: {symptom}\nPRZYCZYNA: {cause}\nNAPRAWA: {fix}\n"
+    if example:
+        content += f"PRZYKŁAD: {example}\n"
+    with open(file_path, "w", encoding="utf-8") as f:
+        f.write(content)
+    status = to_palace(file_path, content)
+    print(f"Dodano: {os.path.basename(file_path)} — {status}")
 
 
-POSPOLITE = set("""nie jest jak przy albo oraz dla tego ten that the and model modelu narzedzie narzedzia blad bledu error
+STOPWORDS = set("""nie jest jak przy albo oraz dla tego ten that the and model modelu narzedzie narzedzia blad bledu error
 przez jako tylko gdy kiedy sie nad pod bez ale czy jego jej ich ma sa to na do od po za ze co""".split())
 
 
-def bez_ogonkow(t):
+def ascii_fold(t):
     return t.lower().translate(str.maketrans("ąćęłńóśźż", "acelnoszz"))
 
 
-def szukaj(q):
+def search(q):
     """Wynik = wniosek, którego OBJAW zawiera większość istotnych słów zapytania ALBO jest znaczeniowo bliski (≥ PROG).
     Znaczeniowo szukamy TYLKO w pokoju błędów opencode — reszty pałacu (audio, sprzęt, prywatne notatki) nie pokazujemy."""
-    slowa = [w for w in re.findall(r"\w+", bez_ogonkow(q)) if len(w) >= 4 and w not in POSPOLITE]
-    wyniki = {}  # plik -> [udział słów w OBJAW, podobieństwo]
-    for f in pliki():
-        t = open(os.path.join(KOPALNIA, f), encoding="utf-8").read()
-        objaw = bez_ogonkow(next((l for l in t.splitlines() if l.startswith("OBJAW: ")), ""))
-        if slowa:
-            udzial = sum(1 for w in slowa if w in objaw) / len(slowa)
-            if udzial >= 0.6 and sum(1 for w in slowa if w in objaw) >= 2:
-                wyniki[f] = [udzial, 0.0]
+    words = [w for w in re.findall(r"\w+", ascii_fold(q)) if len(w) >= 4 and w not in STOPWORDS]
+    hits = {}  # plik -> [udział słów w OBJAW, podobieństwo]
+    for f in lesson_files():
+        t = open(os.path.join(LESSONS_DIR, f), encoding="utf-8").read()
+        symptom = ascii_fold(next((l for l in t.splitlines() if l.startswith("OBJAW: ")), ""))
+        if words:
+            share = sum(1 for w in words if w in symptom) / len(words)
+            if share >= 0.6 and sum(1 for w in words if w in symptom) >= 2:
+                hits[f] = [share, 0.0]
     try:
         from mempalace import mcp_server as m
-        r = cicho(m.tool_search, q, limit=5, wing=WING, room=ROOM)
+        r = quiet(m.tool_search, q, limit=5, wing=WING, room=ROOM)
         for w in (r or {}).get("results") or []:
             sim = float(w.get("similarity") or 0)
-            if w.get("room") != ROOM or sim < PROG:
+            if w.get("room") != ROOM or sim < THRESHOLD:
                 continue
-            f = next((x for x in pliki() if x.startswith(str(w.get("source_file") or "\0")[:40])), None)
+            f = next((x for x in lesson_files() if x.startswith(str(w.get("source_file") or "\0")[:40])), None)
             if f:
-                wyniki.setdefault(f, [0.0, 0.0])[1] = sim
+                hits.setdefault(f, [0.0, 0.0])[1] = sim
     except Exception:
         pass
-    if not wyniki:
-        print("Brak znanych rozwiązań dla tego błędu — to nowy przypadek. Po naprawie dopisz go: lesson-note dodaj …")
+    if not hits:
+        print("Brak znanych rozwiązań dla tego błędu — to nowy przypadek. Po naprawie dopisz go: lesson-note add …")
         return
-    kolejnosc = sorted(wyniki.items(), key=lambda kv: -(kv[1][0] + kv[1][1]))[:4]
-    print(f"Znane rozwiązania ({len(kolejnosc)}) — sprawdź, czy OBJAW pasuje do Twojego błędu, zanim zastosujesz:")
-    for f, (udzial, sim) in kolejnosc:
-        t = open(os.path.join(KOPALNIA, f), encoding="utf-8").read()
-        print(f"\n--- {f} (słowa {udzial:.0%}, podobieństwo {sim:.2f})")
+    ranked = sorted(hits.items(), key=lambda kv: -(kv[1][0] + kv[1][1]))[:4]
+    print(f"Znane rozwiązania ({len(ranked)}) — sprawdź, czy OBJAW pasuje do Twojego błędu, zanim zastosujesz:")
+    for f, (share, sim) in ranked:
+        t = open(os.path.join(LESSONS_DIR, f), encoding="utf-8").read()
+        print(f"\n--- {f} (słowa {share:.0%}, podobieństwo {sim:.2f})")
         print("\n".join(l for l in t.splitlines() if l.startswith(("OBJAW", "PRZYCZYNA", "NAPRAWA", "PRZYKŁAD"))))
 
 
 def main():
     a = sys.argv[1:]
     if not a:
-        p = pliki()
+        p = lesson_files()
         print(f"Wniosków w kopalni: {len(p)} (~/oc-audyt/kopalnia, pałac ~/.mempalace-opencode: {WING}/{ROOM})")
         for f in p[-5:]:
-            t = open(os.path.join(KOPALNIA, f), encoding="utf-8").read()
+            t = open(os.path.join(LESSONS_DIR, f), encoding="utf-8").read()
             o = next((l[7:] for l in t.splitlines() if l.startswith("OBJAW: ")), "")
-            print(f"- {f[:10]} {skrot(o)}")
-    elif a[0] == "szukaj" and len(a) >= 2:
-        szukaj(" ".join(a[1:]))
-    elif a[0] == "uzupelnij":
-        uzupelnij()
-    elif a[0] == "dodaj" and len(a) in (4, 5):
-        dodaj(*a[1:])
+            print(f"- {f[:10]} {shorten(o)}")
+    elif a[0] in ("search", "szukaj") and len(a) >= 2:
+        search(" ".join(a[1:]))
+    elif a[0] in ("backfill", "uzupelnij"):
+        backfill()
+    elif a[0] in ("add", "dodaj") and len(a) in (4, 5):
+        add(*a[1:])
     else:
         print(__doc__)
 

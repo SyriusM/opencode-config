@@ -1,0 +1,787 @@
+[
+ {
+  "type": "code-string",
+  "desc": "ogon </code> z szablonu 9B",
+  "input": "console.log(\"ok\")</code>",
+  "expect": "console.log(\"ok\")"
+ },
+ {
+  "type": "code-string",
+  "desc": "prefiks code:",
+  "input": "code: const r = 1; console.log(r);",
+  "expect": "const r = 1; console.log(r);"
+ },
+ {
+  "type": "code-string",
+  "desc": "podwójnie escapowane cudzysłowy",
+  "input": "const r = await tools.playwright.browser_navigate_back(); console.log(\\\"went back\\\");",
+  "expect": "const r = await tools.playwright.browser_navigate_back(); console.log(\"went back\");"
+ },
+ {
+  "type": "code-string",
+  "desc": "\\n jako dwa znaki między instrukcjami",
+  "input": "const a = 1;\\nconsole.log(a.toString().split(\"\\n\").length);",
+  "expect_contains": "const a = 1;\nconsole.log"
+ },
+ {
+  "type": "code-string",
+  "desc": "płot markdown",
+  "input": "```js\nconsole.log(1)\n```",
+  "expect": "console.log(1)"
+ },
+ {
+  "type": "code-string",
+  "desc": "POPRAWNY kod zostaje bez zmian",
+  "input": "console.log(\"ok \\\"cytat\\\"\")",
+  "expect": "console.log(\"ok \\\"cytat\\\"\")"
+ },
+ {
+  "type": "code-string",
+  "desc": "POPRAWNY kod z \\n w napisie bez zmian",
+  "input": "const a = \"x\\ny\"; console.log(a)",
+  "expect": "const a = \"x\\ny\"; console.log(a)"
+ },
+ {
+  "type": "code-string",
+  "desc": "ref -> target w kliknięciu",
+  "input": "await tools.playwright.browser_click({ref: \"f25e287\"});",
+  "expect": "await tools.playwright.browser_click({target: \"f25e287\"});"
+ },
+ {
+  "type": "code-string",
+  "desc": "target jako obiekt {ref}",
+  "input": "tools.browser.browser_type({target: {ref: 'f20e37'}, text: \"D\"})",
+  "expect": "tools.browser.browser_type({target: 'f20e37', text: \"D\"})"
+ },
+ {
+  "type": "code-string",
+  "desc": "elements -> fields",
+  "input": "tools.browser.browser_fill_form({elements: [{ref: 'f20e37', value: 'DDR3'}]})",
+  "expect": "tools.browser.browser_fill_form({fields: [{target: 'f20e37', value: 'DDR3'}]})"
+ },
+ {
+  "type": "code-string",
+  "desc": "webfetch -> fetch",
+  "input": "const r = await tools.webfetch.webfetch({url: \"https://a.b\"});",
+  "expect": "const r = await tools.fetch.fetch({url: \"https://a.b\"});"
+ },
+ {
+  "type": "code-string",
+  "desc": "podwojony namespace",
+  "input": "await tools.filesystem.filesystem.write_file({path:\"a\"})",
+  "expect": "await tools.filesystem.write_file({path:\"a\"})"
+ },
+ {
+  "type": "code-string",
+  "desc": "POPRAWNE kliknięcie bez zmian",
+  "input": "await tools.playwright.browser_click({target: \"e13\"})",
+  "expect": "await tools.playwright.browser_click({target: \"e13\"})"
+ },
+ {
+  "type": "mcp",
+  "desc": "button[ref=X] -> X",
+  "tool": "playwright_browser_click",
+  "input": {
+   "target": "button[ref=f4e13]"
+  },
+  "expect": {
+   "target": "f4e13"
+  }
+ },
+ {
+  "type": "mcp",
+  "desc": "ref=X -> X",
+  "tool": "playwright_browser_click",
+  "input": {
+   "target": "ref=f19e2"
+  },
+  "expect": {
+   "target": "f19e2"
+  }
+ },
+ {
+  "type": "mcp",
+  "desc": "czas w ms -> s",
+  "tool": "playwright_browser_wait_for",
+  "input": {
+   "time": 1500
+  },
+  "expect": {
+   "time": 2
+  }
+ },
+ {
+  "type": "mcp",
+  "desc": "tabs bez action",
+  "tool": "playwright_browser_tabs",
+  "input": {},
+  "expect": {
+   "action": "list"
+  }
+ },
+ {
+  "type": "mcp",
+  "desc": "old_string -> oldText",
+  "tool": "filesystem_edit_file",
+  "input": {
+   "path": "/a",
+   "edits": [
+    {
+     "old_string": "a",
+     "new_string": "b"
+    }
+   ]
+  },
+  "expect": {
+   "path": "/a",
+   "edits": [
+    {
+     "oldText": "a",
+     "newText": "b"
+    }
+   ]
+  }
+ },
+ {
+  "type": "mcp",
+  "desc": "~ w ścieżce",
+  "tool": "filesystem_read_file",
+  "input": {
+   "path": "~/x/y.json"
+  },
+  "expect": {
+   "path": "@HOME@/x/y.json"
+  }
+ },
+ {
+  "type": "mcp",
+  "desc": "POPRAWNY target bez zmian",
+  "tool": "playwright_browser_click",
+  "input": {
+   "target": "e13"
+  },
+  "expect": {
+   "target": "e13"
+  }
+ },
+ {
+  "type": "code-string",
+  "desc": "escape-cudzyslowow: fallback po nieudanym unescape-poziom (regex z backslash)",
+  "input": "const re = /test\\\\/path/; console.log(\\\"ok\\\")",
+  "expect_contains": "console.log(\"ok\")"
+ },
+ {
+  "type": "code-string",
+  "desc": "selector: w execute → target:",
+  "input": "await tools.playwright.browser_click({selector: \"e42\"})",
+  "expect": "await tools.playwright.browser_click({target: \"e42\"})"
+ },
+ {
+  "type": "code-string",
+  "desc": "element: w browser_click → target:",
+  "input": "await tools.playwright.browser_click({element: \"e99\"})",
+  "expect": "await tools.playwright.browser_click({target: \"e99\"})"
+ },
+ {
+  "type": "code-string",
+  "desc": "element z opisem słownym i poprawnym target — bez zmian",
+  "input": "await tools.playwright.browser_click({element: \"przycisk Wyślij\", target: \"e13\"})",
+  "expect": "await tools.playwright.browser_click({element: \"przycisk Wyślij\", target: \"e13\"})"
+ },
+ {
+  "type": "code-string",
+  "desc": "element z ref ramki f5e43 → target",
+  "input": "await tools.playwright.browser_click({element: 'f5e43'})",
+  "expect": "await tools.playwright.browser_click({target: 'f5e43'})"
+ },
+ {
+  "type": "hint",
+  "desc": "require w execute",
+  "tool": "execute",
+  "input": {
+   "code": "const fs = require('fs');\nconst path = require('path');"
+  },
+  "expect": "require-import"
+ },
+ {
+  "type": "hint",
+  "desc": "await import w execute",
+  "tool": "execute",
+  "input": {
+   "code": "const fs = await import('fs'); console.log(1)"
+  },
+  "expect": "require-import"
+ },
+ {
+  "type": "hint",
+  "desc": "setTimeout w execute",
+  "tool": "execute",
+  "input": {
+   "code": "await new Promise(r => setTimeout(r, 2000)); console.log(1)"
+  },
+  "expect": "timer"
+ },
+ {
+  "type": "hint",
+  "desc": "page.title() w execute",
+  "tool": "execute",
+  "input": {
+   "code": "const r = await tools.playwright.browser_navigate({url: \"https://x.y\"});\nreturn JSON.stringify({title: (await page.title()) || 'N/A'});"
+  },
+  "expect": "page-playwright"
+ },
+ {
+  "type": "hint",
+  "desc": "Python w execute",
+  "tool": "execute",
+  "input": {
+   "code": "# Qwen3-14B\nprint(\"Qwen3-14B VRAM estimate:\")\nprint(f\"  Parametry: 14.8B\")"
+  },
+  "expect": "python-in-execute"
+ },
+ {
+  "type": "hint",
+  "desc": "POPRAWNE: fetch() działa w execute",
+  "tool": "execute",
+  "input": {
+   "code": "const r = await fetch('https://example.com'); console.log(r)"
+  },
+  "expect": null
+ },
+ {
+  "type": "hint",
+  "desc": "tools.websearch w execute",
+  "tool": "execute",
+  "input": {
+   "code": "const r = await tools.websearch.websearch({query: \"x\"}); console.log(r);"
+  },
+  "expect": "websearch-in-execute"
+ },
+ {
+  "type": "hint",
+  "desc": "POPRAWNE: document w browser_evaluate",
+  "tool": "execute",
+  "input": {
+   "code": "const r = await tools.playwright.browser_evaluate({function: \"() => document.title + ' ' + page.url()\"}); console.log(r)"
+  },
+  "expect": null
+ },
+ {
+  "type": "hint",
+  "desc": "POPRAWNE: tools.fetch.fetch",
+  "tool": "execute",
+  "input": {
+   "code": "const r = await tools.fetch.fetch({url: \"https://example.com\", max_length: 5000}); console.log(r)"
+  },
+  "expect": null
+ },
+ {
+  "type": "hint",
+  "desc": "POPRAWNE: słowo require w napisie",
+  "tool": "execute",
+  "input": {
+   "code": "console.log(\"plik nie wymaga require() ani setTimeout()\")"
+  },
+  "expect": null
+ },
+ {
+  "type": "hint",
+  "desc": "POPRAWNE: browser_wait_for",
+  "tool": "execute",
+  "input": {
+   "code": "await tools.playwright.browser_wait_for({time: 2}); console.log('ok')"
+  },
+  "expect": null
+ },
+ {
+  "type": "hint",
+  "desc": "POPRAWNE: komentarz o imporcie",
+  "tool": "execute",
+  "input": {
+   "code": "// nie ma import w execute\nconst r = await tools.filesystem.read_file({path: \"@HOME@/x\"}); console.log(r.content)"
+  },
+  "expect": null
+ },
+ {
+  "type": "hint",
+  "desc": "JS w shell",
+  "tool": "shell",
+  "input": {
+   "command": "tools.playwright.browser_navigate({url: \"https://example.com\"})"
+  },
+  "expect": "js-in-shell"
+ },
+ {
+  "type": "hint",
+  "desc": "sudo",
+  "tool": "shell",
+  "input": {
+   "command": "sudo systemctl restart coolercontrold"
+  },
+  "expect": "sudo"
+ },
+ {
+  "type": "hint",
+  "desc": "pkill na opencode",
+  "tool": "shell",
+  "input": {
+   "command": "pkill -f 'opencode serve'"
+  },
+  "expect": "killing-services"
+ },
+ {
+  "type": "hint",
+  "desc": "apt install",
+  "tool": "shell",
+  "input": {
+   "command": "apt install ripgrep"
+  },
+  "expect": "apt"
+ },
+ {
+  "type": "hint",
+  "desc": "zapis do /etc przez tee",
+  "tool": "shell",
+  "input": {
+   "command": "echo x | tee /etc/modprobe.d/x.conf"
+  },
+  "expect": "write-to-system"
+ },
+ {
+  "type": "hint",
+  "desc": "cp do /etc",
+  "tool": "shell",
+  "input": {
+   "command": "cp ~/tmp-opencode/limine /etc/default/limine"
+  },
+  "expect": "write-to-system"
+ },
+ {
+  "type": "hint",
+  "desc": "POPRAWNE: opencode run (zasada tylko w AGENTS.md)",
+  "tool": "shell",
+  "input": {
+   "command": "opencode run --model x 'test'"
+  },
+  "expect": null
+ },
+ {
+  "type": "hint",
+  "desc": "kbuildsyscaches6",
+  "tool": "shell",
+  "input": {
+   "command": "kbuildsyscaches6 --update 2>&1 | tail -3"
+  },
+  "expect": "kbuildsycoca"
+ },
+ {
+  "type": "hint",
+  "desc": "POPRAWNE: odczyt z /etc",
+  "tool": "shell",
+  "input": {
+   "command": "cat /etc/os-release | head -3"
+  },
+  "expect": null
+ },
+ {
+  "type": "hint",
+  "desc": "POPRAWNE: cp z /etc do domu",
+  "tool": "shell",
+  "input": {
+   "command": "cp /etc/default/limine ~/tmp-opencode/limine.kopia"
+  },
+  "expect": null
+ },
+ {
+  "type": "hint",
+  "desc": "POPRAWNE: grep słowa sudo w pliku",
+  "tool": "shell",
+  "input": {
+   "command": "grep -n 'sudo cp' ~/.config/opencode/AGENTS.md"
+  },
+  "expect": null
+ },
+ {
+  "type": "hint",
+  "desc": "POPRAWNE: pgrep -x",
+  "tool": "shell",
+  "input": {
+   "command": "pgrep -x brave | head -3"
+  },
+  "expect": null
+ },
+ {
+  "type": "hint",
+  "desc": "POPRAWNE: przekierowanie do domu",
+  "tool": "shell",
+  "input": {
+   "command": "ls /usr/share/icons > ~/tmp-opencode/ikony.txt"
+  },
+  "expect": null
+ },
+ {
+  "type": "hint",
+  "desc": "POPRAWNE: echo z napisem pkill -f",
+  "tool": "shell",
+  "input": {
+   "command": "echo \"nie używaj pkill -f\" >> ~/tmp-opencode/notatka.txt"
+  },
+  "expect": null
+ },
+ {
+  "type": "hint",
+  "desc": "POPRAWNE: curl i python",
+  "tool": "shell",
+  "input": {
+   "command": "curl -s localhost:8086/health | python3 -c 'import sys; print(sys.stdin.read())'"
+  },
+  "expect": null
+ },
+ {
+  "type": "hint",
+  "desc": "POPRAWNE: pgrep -af (listowanie)",
+  "tool": "shell",
+  "input": {
+   "command": "pgrep -af opencode | head -20"
+  },
+  "expect": null
+ },
+ {
+  "type": "hint",
+  "desc": "POPRAWNE: pkill własnego procesu vllm",
+  "tool": "shell",
+  "input": {
+   "command": "pkill -f \"vllm\" 2>/dev/null; sleep 2"
+  },
+  "expect": null
+ },
+ {
+  "type": "hint",
+  "desc": "killall llama-server",
+  "tool": "shell",
+  "input": {
+   "command": "killall llama-server"
+  },
+  "expect": "killing-services"
+ },
+ {
+  "type": "hint",
+  "desc": "POPRAWNE: skrypt Pythona jako treść pliku",
+  "tool": "execute",
+  "input": {
+   "code": "const content = `#!/usr/bin/env python3\nimport argparse\nprint(\"x\")\n`;\nawait tools.filesystem.write_file({path: \"@HOME@/tmp-opencode/s.py\", content});"
+  },
+  "expect": null
+ },
+ {
+  "type": "hint",
+  "desc": "naprawa: zapis do pamięci użytkownika zablokowany",
+  "tool": "execute",
+  "input": {
+   "code": "await tools.mempalace.mempalace_add_drawer({wing: \"linux\", room: \"opencode\", content: \"x\"})"
+  },
+  "expect": "repair-memory-write",
+  "mode": "repair"
+ },
+ {
+  "type": "hint",
+  "desc": "naprawa: usuwanie z pamięci użytkownika zablokowane",
+  "tool": "execute",
+  "input": {
+   "code": "await tools.mempalace.mempalace_delete_drawer({drawer_id: \"d1\"})"
+  },
+  "expect": "repair-memory-write",
+  "mode": "repair"
+ },
+ {
+  "type": "hint",
+  "desc": "naprawa: POPRAWNE czytanie pamięci dozwolone",
+  "tool": "execute",
+  "input": {
+   "code": "const r = await tools.mempalace.mempalace_search({query: \"opencode\"}); console.log(r)"
+  },
+  "expect": null,
+  "mode": "repair"
+ },
+ {
+  "type": "hint",
+  "desc": "naprawa: mempalace mine zablokowane",
+  "tool": "shell",
+  "input": {
+   "command": "mempalace mine ~/oc-audyt/kopalnia --wing linux"
+  },
+  "expect": "repair-mempalace-cli",
+  "mode": "repair"
+ },
+ {
+  "type": "hint",
+  "desc": "naprawa: POPRAWNE mempalace search dozwolone",
+  "tool": "shell",
+  "input": {
+   "command": "mempalace search \"opencode\" --results 3"
+  },
+  "expect": null,
+  "mode": "repair"
+ },
+ {
+  "type": "hint",
+  "desc": "naprawa: POPRAWNE oc-wniosek dodaj",
+  "tool": "shell",
+  "input": {
+   "command": "~/bin/oc-wniosek dodaj \"OBJAW: x y z\" \"PRZYCZYNA abc\" \"NAPRAWA abc def\""
+  },
+  "expect": null,
+  "mode": "repair"
+ },
+ {
+  "type": "hint",
+  "desc": "ZWYKŁA sesja: zapis do pamięci dozwolony",
+  "tool": "execute",
+  "input": {
+   "code": "await tools.mempalace.mempalace_add_drawer({wing: \"linux\", room: \"opencode\", content: \"x\"})"
+  },
+  "expect": null
+ },
+ {
+  "type": "hint",
+  "desc": "ZWYKŁA sesja: mempalace mine dozwolone",
+  "tool": "shell",
+  "input": {
+   "command": "mempalace mine ~/notatki"
+  },
+  "expect": null
+ },
+ {
+  "type": "enables-repair",
+  "desc": "skill autodiag włącza tryb",
+  "tool": "skill",
+  "input": {
+   "id": "autodiag"
+  },
+  "expect": true
+ },
+ {
+  "type": "enables-repair",
+  "desc": "inny skill nie włącza",
+  "tool": "skill",
+  "input": {
+   "id": "steam"
+  },
+  "expect": false
+ },
+ {
+  "type": "enables-repair",
+  "desc": "oc-wniosek włącza tryb",
+  "tool": "shell",
+  "input": {
+   "command": "~/bin/oc-wniosek szukaj \"x\""
+  },
+  "expect": true
+ },
+ {
+  "type": "enables-repair",
+  "desc": "test wtyczki włącza tryb",
+  "tool": "shell",
+  "input": {
+   "command": "bash ~/oc-audyt/test-wtyczki.sh 2>&1"
+  },
+  "expect": true
+ },
+ {
+  "type": "enables-repair",
+  "desc": "zwykłe polecenie nie włącza",
+  "tool": "shell",
+  "input": {
+   "command": "ls ~/oc-audyt"
+  },
+  "expect": false
+ },
+ {
+  "type": "lesson",
+  "desc": "RECALL: require w execute",
+  "input": "ReferenceError: Unknown identifier 'require'. (line 2, col 19)",
+  "expect": "2026-10-07-referenceerror-unknown-identifier-require"
+ },
+ {
+  "type": "lesson",
+  "desc": "RECALL: selektor z ref",
+  "input": "### Error\nError: \"button[ref=f4e13]\" does not match any elements.",
+  "expect": "2026-10-07-unknown-engine-ref"
+ },
+ {
+  "type": "lesson",
+  "desc": "RECALL: element poza ekranem",
+  "input": "### Error TimeoutError: browserBackend.callTool: Timeout 5000ms exceeded. element is outside of the viewport",
+  "expect": "2026-10-07-klik-timeout"
+ },
+ {
+  "type": "lesson",
+  "desc": "RECALL: martwy socket modelu",
+  "input": "ConnectionRefused: Unable to connect. Is the computer able to access the url?",
+  "expect": "2026-10-07-connectionrefused"
+ },
+ {
+  "type": "lesson",
+  "desc": "RECALL: ogólne Invalid arguments innego narzędzia — brak",
+  "input": "The read tool was called with invalid arguments: SchemaError(Missing key at [\"filePath\"]).",
+  "expect": null
+ },
+ {
+  "type": "lesson",
+  "desc": "RECALL: ogólny błąd składni — brak",
+  "input": "Unexpected token (13:1)",
+  "expect": null
+ },
+ {
+  "type": "lesson",
+  "desc": "RECALL: kod wyjścia 1 — brak",
+  "input": "(no output) Exited with code 1",
+  "expect": null
+ },
+ {
+  "type": "lesson",
+  "desc": "RECALL: 403 bez kontekstu — brak",
+  "input": "Failed to fetch https://www.nexusmods.com/x - status code 403",
+  "expect": null
+ },
+ {
+  "type": "hint",
+  "tool": "shell",
+  "input": {
+   "command": "ls -la \"~/Projekt/ed-trade-overlay/\""
+  },
+  "expect": "guessed-path"
+ },
+ {
+  "type": "mcp",
+  "tool": "playwright_browser_click",
+  "input": {
+   "target": "button[ref=f4e13]"
+  },
+  "expect": {
+   "target": "f4e13"
+  }
+ },
+ {
+  "type": "mcp",
+  "tool": "playwright_browser_click",
+  "input": {
+   "target": "img[ref=zzz]"
+  },
+  "expect": {
+   "target": "zzz"
+  }
+ },
+ {
+  "type": "mcp",
+  "tool": "playwright_browser_click",
+  "input": {
+   "target": "[ref=abc123]"
+  },
+  "expect": {
+   "target": "abc123"
+  }
+ },
+ {
+  "type": "code",
+  "tool": "execute",
+  "input": {
+   "code": "const r = await tools.playwright.browser_navigate({url:\"https://example.com\"}); console.log(r);"
+  },
+  "expect": {
+   "code": "const r = await tools.playwright.browser_navigate({url:\"https://example.com\"}); console.log(r);"
+  }
+ },
+ {
+  "type": "code",
+  "tool": "execute",
+  "input": {
+   "code": "await tools.mempalace.mempalace_list_wings(); console.log(wings);"
+  },
+  "expect": {
+   "code": "await tools.mempalace.mempalace_list_wings(); console.log(wings);"
+  }
+ },
+ {
+  "type": "code",
+  "tool": "execute",
+  "input": {
+   "code": "const data = await tools.fetch.fetch({url:\"https://api.example.com\"}); console.log(data);"
+  },
+  "expect": {
+   "code": "const data = await tools.fetch.fetch({url:\"https://api.example.com\"}); console.log(data);"
+  }
+ },
+ {
+  "type": "hint",
+  "desc": "cat bez flag, zla sciezka (literowka IStnieje)",
+  "tool": "bash",
+  "input": {
+   "command": "cat ~/Pojekty/x.txt"
+  },
+  "expect": "guessed-path"
+ },
+ {
+  "type": "hint",
+  "desc": "cat -n zla sciezka (m[2]=flaga)",
+  "tool": "bash",
+  "input": {
+   "command": "cat -n ~/Pojekty/x.txt"
+  },
+  "expect": "guessed-path"
+ },
+ {
+  "type": "hint",
+  "desc": "cat istniejacy",
+  "tool": "bash",
+  "input": {
+   "command": "cat ~/CLAUDE.md"
+  },
+  "expect": null
+ },
+ {
+  "type": "hint",
+  "desc": "find zla sciezka",
+  "tool": "bash",
+  "input": {
+   "command": "find ~/Pojekty -name x"
+  },
+  "expect": "guessed-path"
+ },
+ {
+  "type": "hint",
+  "desc": "find istniejacy",
+  "tool": "bash",
+  "input": {
+   "command": "find ~/Projekty -name x"
+  },
+  "expect": null
+ },
+ {
+  "type": "hint",
+  "desc": "cp zle zrodlo",
+  "tool": "bash",
+  "input": {
+   "command": "cp ~/Projekt/plik.txt ~/Pobrane/"
+  },
+  "expect": "guessed-path"
+ },
+ {
+  "type": "hint",
+  "desc": "cp istniejace zrodlo",
+  "tool": "bash",
+  "input": {
+   "command": "cp ~/CLAUDE.md ~/tmp-opencode/"
+  },
+  "expect": null
+ },
+ {
+  "type": "hint",
+  "desc": "sudo nadal lapane",
+  "tool": "bash",
+  "input": {
+   "command": "sudo ls /root"
+  },
+  "expect": "sudo"
+ }
+]

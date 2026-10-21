@@ -17,41 +17,43 @@ CFG="${XDG_CONFIG_HOME:-$HOME/.config}"   # opencode i systemd też czytają XDG
 PLUGINS="$CFG/opencode/plugins"
 CONF_DIR="$CFG/opencode-config"
 CONF="$CONF_DIR/config"
-LISTA="$CONF_DIR/zainstalowane.txt"
-VENV_DOMYSLNY="$HOME/.local/share/opencode-config/venv"
+MANIFEST="$CONF_DIR/installed.txt"
+DEFAULT_VENV="$HOME/.local/share/opencode-config/venv"
 TS="$(date +%Y%m%d-%H%M%S)"
-TAK=0; TRYB=install
+YES=0; MODE=install
 
 for a in "$@"; do
   case "$a" in
-    -y|--yes) TAK=1 ;;
-    --check) TRYB=check ;;
-    --uninstall) TRYB=uninstall ;;
+    -y|--yes) YES=1 ;;
+    --check) MODE=check ;;
+    --uninstall) MODE=uninstall ;;
     -h|--help) sed -n '2,9p' "$0"; exit 0 ;;
     *) echo "Nieznana opcja: $a" >&2; exit 2 ;;
   esac
 done
 
 ok()   { printf '  \033[32m✓\033[0m %s\n' "$*"; }
-uwaga(){ printf '  \033[33m!\033[0m %s\n' "$*"; }
-blad() { printf '  \033[31m✗\033[0m %s\n' "$*"; }
-pytaj() { # pytaj "Pytanie" domyślna → echo odpowiedź
-  local odp
-  if [ "$TAK" = 1 ] || [ ! -t 0 ]; then echo "$2"; return; fi
-  read -r -p "  $1 [$2]: " odp </dev/tty || true
-  echo "${odp:-$2}"
+warn(){ printf '  \033[33m!\033[0m %s\n' "$*"; }
+fail() { printf '  \033[31m✗\033[0m %s\n' "$*"; }
+ask() { # ask "Pytanie" domyślna → echo odpowiedź
+  local answer
+  if [ "$YES" = 1 ] || [ ! -t 0 ]; then echo "$2"; return; fi
+  read -r -p "  $1 [$2]: " answer </dev/tty || true
+  echo "${answer:-$2}"
 }
-tak_nie() { # tak_nie "Pytanie" t|n
-  local d="$2" odp
-  if [ "$TAK" = 1 ] || [ ! -t 0 ]; then [ "$d" = t ]; return; fi
-  read -r -p "  $1 [$([ "$d" = t ] && echo T/n || echo t/N)]: " odp </dev/tty || true
-  odp="${odp:-$d}"; [[ "$odp" =~ ^[tTyY] ]]
+yes_no() { # yes_no "Pytanie" t|n
+  local def="$2" answer
+  if [ "$YES" = 1 ] || [ ! -t 0 ]; then [ "$def" = t ]; return; fi
+  read -r -p "  $1 [$([ "$def" = t ] && echo T/n || echo t/N)]: " answer </dev/tty || true
+  answer="${answer:-$def}"; [[ "$answer" =~ ^[tTyY] ]]
 }
 
 # ── deinstalacja ─────────────────────────────────────────────────────────────────────────────
-if [ "$TRYB" = uninstall ]; then
+if [ "$MODE" = uninstall ]; then
   echo "Deinstalacja opencode-config"
-  [ -f "$LISTA" ] || { blad "brak $LISTA — nic nie wiem o instalacji"; exit 1; }
+  # installations before 2026-10-21 kept the list as zainstalowane.txt
+  [ -f "$MANIFEST" ] || [ ! -f "$CONF_DIR/zainstalowane.txt" ] || mv "$CONF_DIR/zainstalowane.txt" "$MANIFEST"
+  [ -f "$MANIFEST" ] || { fail "brak $MANIFEST — nic nie wiem o instalacji"; exit 1; }
   if command -v systemctl >/dev/null && systemctl --user show-environment >/dev/null 2>&1; then
     systemctl --user disable --now audit-retention.timer >/dev/null 2>&1 || true
   fi
@@ -59,70 +61,70 @@ if [ "$TRYB" = uninstall ]; then
     [ -n "$f" ] || continue
     rm -f "$f" && ok "usunięto $f"
     rmdir "$(dirname "$f")" 2>/dev/null || true
-  done < "$LISTA"
+  done < "$MANIFEST"
   command -v systemctl >/dev/null && systemctl --user daemon-reload >/dev/null 2>&1 || true
-  rm -f "$LISTA"
+  rm -f "$MANIFEST"
   ok "gotowe (dane: ~/oc-audyt, ~/.mempalace-opencode, $CONF i venv zostają — usuń ręcznie, jeśli chcesz)"
   exit 0
 fi
 
 # ── autotest ─────────────────────────────────────────────────────────────────────────────────
 autotest() {
-  local bledy=0 py
+  local errors=0 py
   echo "Autotest"
   for n in tool-input-fix lesson-draft palace-context error-hook auto-backup; do
-    if [ -f "$PLUGINS/$n/index.ts" ]; then ok "wtyczka $n"; else blad "brak wtyczki $n"; bledy=$((bledy+1)); fi
+    if [ -f "$PLUGINS/$n/index.ts" ]; then ok "wtyczka $n"; else fail "brak wtyczki $n"; errors=$((errors+1)); fi
   done
   for f in palace-context audit-retention lesson-note agent-rule backup-copy; do
-    if [ -x "$BIN/$f" ]; then ok "skrypt ~/bin/$f"; else blad "brak ~/bin/$f"; bledy=$((bledy+1)); fi
+    if [ -x "$BIN/$f" ]; then ok "skrypt ~/bin/$f"; else fail "brak ~/bin/$f"; errors=$((errors+1)); fi
   done
   py="$(head -1 "$BIN/palace-context" | sed 's/^#!//')"
   if "$py" -I -c "import mempalace.mcp_server" 2>/dev/null; then ok "MemPalace importuje się ($py)"
-  else uwaga "MemPalace nie importuje się w $py — palace-context i lesson-note będą milczeć"; fi
+  else warn "MemPalace nie importuje się w $py — palace-context i lesson-note będą milczeć"; fi
   local tmp; tmp="$(mktemp -d "$HOME/.oc-config-test.XXXX")"
   if out="$(timeout 120 "$BIN/palace-context" "$tmp" 2>&1)"; then ok "palace-context działa (wynik: ${out:-pusty — palace bez notatek dla tego katalogu})"
-  else blad "palace-context padł: $out"; bledy=$((bledy+1)); fi
+  else fail "palace-context padł: $out"; errors=$((errors+1)); fi
   rmdir "$tmp" 2>/dev/null || true
   if out="$(timeout 120 "$BIN/lesson-note" 2>&1)"; then ok "lesson-note: $(echo "$out" | tail -1)"
-  else blad "lesson-note padł: $(echo "$out" | tail -2)"; bledy=$((bledy+1)); fi
+  else fail "lesson-note padł: $(echo "$out" | tail -2)"; errors=$((errors+1)); fi
   if command -v node >/dev/null && command -v npx >/dev/null; then
     for n in tool-input-fix lesson-draft palace-context error-hook auto-backup; do
       if npx -y esbuild "$PLUGINS/$n/index.ts" --log-level=error --outfile=/dev/null >/dev/null 2>&1; then ok "składnia $n"
-      else blad "błąd składni $n"; bledy=$((bledy+1)); fi
+      else fail "błąd składni $n"; errors=$((errors+1)); fi
     done
-  else uwaga "brak node/npx — pomijam kontrolę składni wtyczek"; fi
+  else warn "brak node/npx — pomijam kontrolę składni wtyczek"; fi
   if command -v opencode >/dev/null; then ok "opencode: $(opencode --version 2>&1 | tail -1)"
-  else uwaga "opencode nie jest zainstalowany (npm i -g @opencode/cli) — wtyczki zadziałają po instalacji"; fi
-  [ "$bledy" = 0 ] && echo "Autotest: OK" || echo "Autotest: $bledy błędów"
-  return "$bledy"
+  else warn "opencode nie jest zainstalowany (npm i -g @opencode/cli) — wtyczki zadziałają po instalacji"; fi
+  [ "$errors" = 0 ] && echo "Autotest: OK" || echo "Autotest: $errors błędów"
+  return "$errors"
 }
-if [ "$TRYB" = check ]; then autotest; exit $?; fi
+if [ "$MODE" = check ]; then autotest; exit $?; fi
 
 # ── instalacja ───────────────────────────────────────────────────────────────────────────────
 echo "opencode-config — instalacja"
 echo "1. Wymagania"
-command -v python3 >/dev/null || { blad "brak python3"; exit 1; }
-python3 -c 'import sys; sys.exit(sys.version_info < (3, 10))' || { blad "potrzebny Python ≥ 3.10"; exit 1; }
+command -v python3 >/dev/null || { fail "brak python3"; exit 1; }
+python3 -c 'import sys; sys.exit(sys.version_info < (3, 10))' || { fail "potrzebny Python ≥ 3.10"; exit 1; }
 ok "python3 $(python3 -c 'import platform; print(platform.python_version())')"
-command -v opencode >/dev/null && ok "opencode $(opencode --version 2>&1 | tail -1)" || uwaga "opencode nie znaleziony — zainstaluj: npm i -g @opencode/cli"
+command -v opencode >/dev/null && ok "opencode $(opencode --version 2>&1 | tail -1)" || warn "opencode nie znaleziony — zainstaluj: npm i -g @opencode/cli"
 
 echo "2. MemPalace"
 PY=""
-for kand in "${MEMPALACE_PYTHON:-}" "$HOME/mempalace/.venv/bin/python" "$VENV_DOMYSLNY/bin/python" python3; do
-  [ -n "$kand" ] || continue
-  if command -v "$kand" >/dev/null 2>&1 && "$kand" -I -c "import mempalace.mcp_server" 2>/dev/null; then PY="$(command -v "$kand")"; break; fi
+for cand in "${MEMPALACE_PYTHON:-}" "$HOME/mempalace/.venv/bin/python" "$DEFAULT_VENV/bin/python" python3; do
+  [ -n "$cand" ] || continue
+  if command -v "$cand" >/dev/null 2>&1 && "$cand" -I -c "import mempalace.mcp_server" 2>/dev/null; then PY="$(command -v "$cand")"; break; fi
 done
 if [ -n "$PY" ]; then
   ok "MemPalace znaleziony: $PY"
-elif tak_nie "MemPalace nie znaleziony. Utworzyć venv w $VENV_DOMYSLNY i zainstalować mempalace z PyPI?" t; then
-  python3 -m venv "$VENV_DOMYSLNY"
-  "$VENV_DOMYSLNY/bin/pip" install -q --upgrade pip
-  "$VENV_DOMYSLNY/bin/pip" install -q mempalace
-  PY="$VENV_DOMYSLNY/bin/python"
+elif yes_no "MemPalace nie znaleziony. Utworzyć venv w $DEFAULT_VENV i zainstalować mempalace z PyPI?" t; then
+  python3 -m venv "$DEFAULT_VENV"
+  "$DEFAULT_VENV/bin/pip" install -q --upgrade pip
+  "$DEFAULT_VENV/bin/pip" install -q mempalace
+  PY="$DEFAULT_VENV/bin/python"
   ok "zainstalowano mempalace $("$PY" -m pip show mempalace 2>/dev/null | sed -n 's/^Version: //p')"
 else
   PY="$(command -v python3)"
-  uwaga "bez MemPalace: palace-context i lesson-note będą milczeć (wtyczki samonaprawy działają)"
+  warn "bez MemPalace: palace-context i lesson-note będą milczeć (wtyczki samonaprawy działają)"
 fi
 
 echo "3. Ustawienia"
@@ -135,9 +137,9 @@ echo "  Embeddingi MemPalace (standardowe porty):"
 echo "    0     — wbudowane w MemPalace, bez serwera (domyślnie)"
 echo "    8080  — llama.cpp llama-server (domyślny port)"
 echo "    11434 — Ollama (domyślny port)"
-PORT="$(pytaj "Port serwera embeddingów do kontroli zdrowia" "${PALACE_EMBED_PORT:-0}")"
-[[ "$PORT" =~ ^[0-9]+$ ]] && [ "$PORT" -le 65535 ] || { uwaga "„$PORT” to nie port — ustawiam 0"; PORT=0; }
-WINGS="$(pytaj "Skrzydła palace widoczne dla modelu (lista po przecinku, * = wszystkie)" "${PALACE_WINGS:-*}")"
+PORT="$(ask "Port serwera embeddingów do kontroli zdrowia" "${PALACE_EMBED_PORT:-0}")"
+[[ "$PORT" =~ ^[0-9]+$ ]] && [ "$PORT" -le 65535 ] || { warn "„$PORT” to nie port — ustawiam 0"; PORT=0; }
+WINGS="$(ask "Skrzydła palace widoczne dla modelu (lista po przecinku, * = wszystkie)" "${PALACE_WINGS:-*}")"
 mkdir -p "$CONF_DIR"
 [ -f "$CONF" ] && cp -p "$CONF" "$CONF.bak-$TS"
 cat > "$CONF" <<EOF
@@ -157,77 +159,77 @@ elif "$PY" -I -c "import mempalace.mcp_server" 2>/dev/null; then
 from mempalace import mcp_server as m
 c = m._get_collection(create=True)
 c.query(query_texts=['rozgrzewka'], n_results=1)" >/dev/null 2>&1; then ok "model embeddingów gotowy"
-  else uwaga "nie udało się pobrać modelu embeddingów — pobierze się przy pierwszym użyciu"; fi
+  else warn "nie udało się pobrać modelu embeddingów — pobierze się przy pierwszym użyciu"; fi
 fi
 LLM_URL=""; LLM_MODEL=""
 if command -v curl >/dev/null; then
   if m="$(curl -s -m 3 http://127.0.0.1:8080/v1/models 2>/dev/null)" && [ -n "$m" ]; then
     LLM_MODEL="$(printf '%s' "$m" | python3 -c 'import json,sys; d=json.load(sys.stdin); print((d.get("data") or [{}])[0].get("id",""))' 2>/dev/null || true)"
     if [ -n "$LLM_MODEL" ]; then LLM_URL="http://127.0.0.1:8080/v1"; ok "llama.cpp na :8080 (model: $LLM_MODEL)"
-    else uwaga ":8080 odpowiada, ale to nie serwer modeli (np. Open WebUI) — pomijam"; fi
+    else warn ":8080 odpowiada, ale to nie serwer modeli (np. Open WebUI) — pomijam"; fi
   fi
   if [ -z "$LLM_URL" ] && t="$(curl -s -m 3 http://127.0.0.1:11434/api/tags 2>/dev/null)" && [ -n "$t" ]; then
     LLM_URL="http://127.0.0.1:11434/v1"
     LLM_MODEL="$(printf '%s' "$t" | python3 -c 'import json,sys; d=json.load(sys.stdin); import re; m=[x.get("name","") for x in d.get("models") or [] if not re.search("embed|bge|minilm|e5-|rerank", x.get("name",""), re.I)]; print(m[0] if m else "")' 2>/dev/null || true)"
-    if [ -z "$LLM_MODEL" ] && command -v ollama >/dev/null && tak_nie "Ollama nie ma modeli. Pobrać qwen3:8b (~5 GB, wywołuje narzędzia)?" n; then
+    if [ -z "$LLM_MODEL" ] && command -v ollama >/dev/null && yes_no "Ollama nie ma modeli. Pobrać qwen3:8b (~5 GB, wywołuje narzędzia)?" n; then
       ollama pull qwen3:8b && LLM_MODEL="qwen3:8b"
     fi
     ok "Ollama na :11434 (model: ${LLM_MODEL:-brak})"
   fi
-  [ -n "$LLM_URL" ] || uwaga "nie wykryto lokalnego serwera modeli (llama.cpp :8080, Ollama :11434) — opencode potrzebuje dostawcy w opencode.json"
+  [ -n "$LLM_URL" ] || warn "nie wykryto lokalnego serwera modeli (llama.cpp :8080, Ollama :11434) — opencode potrzebuje dostawcy w opencode.json"
 else
-  uwaga "brak curl — pomijam wykrywanie serwera modeli"
+  warn "brak curl — pomijam wykrywanie serwera modeli"
 fi
 OC_JSON="$CFG/opencode/opencode.json"
-OC_NOWY=""
+OC_NEW=""
 if [ -n "$LLM_URL" ] && [ -n "$LLM_MODEL" ]; then
   if [ -f "$OC_JSON" ]; then
-    uwaga "$OC_JSON istnieje — nie ruszam. Dostawca do dopisania: \"local\": {\"npm\": \"@ai-sdk/openai-compatible\", \"options\": {\"baseURL\": \"$LLM_URL\"}, \"models\": {\"$LLM_MODEL\": {}}}"
-  elif tak_nie "Zapisać $OC_JSON z tym modelem jako domyślnym?" t; then
+    warn "$OC_JSON istnieje — nie ruszam. Dostawca do dopisania: \"local\": {\"npm\": \"@ai-sdk/openai-compatible\", \"options\": {\"baseURL\": \"$LLM_URL\"}, \"models\": {\"$LLM_MODEL\": {}}}"
+  elif yes_no "Zapisać $OC_JSON z tym modelem jako domyślnym?" t; then
     mkdir -p "$(dirname "$OC_JSON")"
     # enabled_providers + small_model: bez nich opencode wysyła m.in. tytuły sesji do modeli w chmurze
     printf '{\n  "$schema": "https://opencode.ai/config.json",\n  "enabled_providers": ["local"],\n  "model": "local/%s",\n  "small_model": "local/%s",\n  "share": "disabled",\n  "provider": {\n    "local": {\n      "npm": "@ai-sdk/openai-compatible",\n      "options": { "baseURL": "%s" },\n      "models": { "%s": { "name": "%s (lokalnie)" } }\n    }\n  }\n}\n' \
       "$LLM_MODEL" "$LLM_MODEL" "$LLM_URL" "$LLM_MODEL" "$LLM_MODEL" > "$OC_JSON"
-    OC_NOWY="$OC_JSON"; ok "zapisano $OC_JSON"
+    OC_NEW="$OC_JSON"; ok "zapisano $OC_JSON"
   fi
 fi
 
 echo "4. Pliki"
-: > "$LISTA.nowa"
-[ -n "$OC_NOWY" ] && echo "$OC_NOWY" >> "$LISTA.nowa"
-instaluj() { # instaluj źródło cel tryb
+: > "$MANIFEST.new"
+[ -n "$OC_NEW" ] && echo "$OC_NEW" >> "$MANIFEST.new"
+install_file() { # install_file źródło cel tryb
   local src="$1" dst="$2"
   mkdir -p "$(dirname "$dst")"
-  if [ -f "$dst" ] && ! cmp -s "$src" "$dst"; then cp -p "$dst" "$dst.bak-$TS"; uwaga "kopia: $dst.bak-$TS"; fi
+  if [ -f "$dst" ] && ! cmp -s "$src" "$dst"; then cp -p "$dst" "$dst.bak-$TS"; warn "kopia: $dst.bak-$TS"; fi
   install -m "$3" "$src" "$dst"
-  echo "$dst" >> "$LISTA.nowa"
+  echo "$dst" >> "$MANIFEST.new"
 }
 for d in "$REPO"/plugins/*/; do
-  n="$(basename "$d")"; instaluj "$d/index.ts" "$PLUGINS/$n/index.ts" 644; ok "wtyczka $n"
+  n="$(basename "$d")"; install_file "$d/index.ts" "$PLUGINS/$n/index.ts" 644; ok "wtyczka $n"
 done
 for f in "$REPO"/bin/*; do
   [ -f "$f" ] || continue  # np. __pycache__ po sprawdzaniu składni
   n="$(basename "$f")"; tmp="$(mktemp)"
   # shebang Pythona → wybrany interpreter z MemPalace; /home/user → ten katalog domowy
   sed -e "1s|^#!/home/user/mempalace/.venv/bin/python|#!$PY|" -e "s|/home/user|$HOME|g" "$f" > "$tmp"
-  instaluj "$tmp" "$BIN/$n" 755; rm -f "$tmp"; ok "~/bin/$n"
+  install_file "$tmp" "$BIN/$n" 755; rm -f "$tmp"; ok "~/bin/$n"
 done
-instaluj "$REPO/freecode/freecode" "$BIN/freecode" 755; ok "~/bin/freecode (opencode tylko na lokalnych modelach)"
+install_file "$REPO/freecode/freecode" "$BIN/freecode" 755; ok "~/bin/freecode (opencode tylko na lokalnych modelach)"
 mkdir -p "$HOME/oc-audyt/kopalnia" "$HOME/oc-audyt/auto-kopie" "$HOME/tmp-opencode" "$HOME/mempalace/audit"
 if [ -z "$(ls -A "$HOME/oc-audyt/kopalnia" 2>/dev/null)" ]; then
-  cp "$REPO/kopalnia/PRZYKLAD.md" "$HOME/oc-audyt/kopalnia/" && ok "przykładowy wniosek w ~/oc-audyt/kopalnia"
+  cp "$REPO/lessons/EXAMPLE.md" "$HOME/oc-audyt/kopalnia/" && ok "przykładowy wniosek w ~/oc-audyt/kopalnia"
 fi
-case ":$PATH:" in *":$BIN:"*) ;; *) uwaga "~/bin nie jest w PATH — dopisz do profilu powłoki" ;; esac
+case ":$PATH:" in *":$BIN:"*) ;; *) warn "~/bin nie jest w PATH — dopisz do profilu powłoki" ;; esac
 
 echo "5. Usługi systemd (--user)"
 if command -v systemctl >/dev/null && systemctl --user show-environment >/dev/null 2>&1; then
-  for f in "$REPO"/systemd/*; do instaluj "$f" "$CFG/systemd/user/$(basename "$f")" 644; done
+  for f in "$REPO"/systemd/*; do install_file "$f" "$CFG/systemd/user/$(basename "$f")" 644; done
   systemctl --user daemon-reload
   systemctl --user enable --now audit-retention.timer >/dev/null 2>&1 && ok "audit-retention.timer włączony"
 else
-  uwaga "brak systemd --user — retencję audytu uruchamiaj ręcznie: ~/bin/audit-retention"
+  warn "brak systemd --user — retencję audytu uruchamiaj ręcznie: ~/bin/audit-retention"
 fi
 
-{ cat "$LISTA.nowa"; [ -f "$LISTA" ] && cat "$LISTA"; true; } | sort -u > "$LISTA.tmp" && mv "$LISTA.tmp" "$LISTA" && rm -f "$LISTA.nowa"
+{ cat "$MANIFEST.new"; [ -f "$MANIFEST" ] && cat "$MANIFEST"; true; } | sort -u > "$MANIFEST.tmp" && mv "$MANIFEST.tmp" "$MANIFEST" && rm -f "$MANIFEST.new"
 echo "6. Gotowe — wtyczki wczytają się przy następnym starcie opencode."
 autotest || true

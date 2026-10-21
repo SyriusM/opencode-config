@@ -15,10 +15,10 @@ To czysty kod, bez konfiguracji modeli, promptów i danych.
 | `plugins/no-call-guard` | Wykrywa turę, w której model pokazał komendę z „wynikiem”, ale nie wywołał narzędzia (zmyślony wynik). Domyślnie tylko loguje; z `NO_CALL_GUARD=act` dopisuje notkę, która każe uruchomić komendę albo przyznać, że jej nie uruchamiał. |
 | `plugins/error-hook` | Zapisuje błędy narzędzi do JSONL (`~/mempalace/audit/`). |
 | `plugins/auto-backup` | Przed każdą zmianą plików konfiguracji robi kopię zapasową (cofanie: `bin/backup-copy`). |
-| `bin/lesson-note` | Kopalnia wniosków: `OBJAW / PRZYCZYNA / NAPRAWA / PRZYKŁAD` w plikach i w **osobnym** palace (`~/.mempalace-opencode`). Wnioski modeli nie mieszają się z pamięcią osobistą. Format: `kopalnia/PRZYKLAD.md`. |
-| `bin/agent-rule` | Pozwala modelowi dopisać krótką regułę do bloku `WYUCZONE` w `AGENTS.md` (limit 10 linii, z kopią). |
+| `bin/lesson-note` | Kopalnia wniosków: `OBJAW / PRZYCZYNA / NAPRAWA / PRZYKŁAD` w plikach i w **osobnym** palace (`~/.mempalace-opencode`). Wnioski modeli nie mieszają się z pamięcią osobistą. Format: `lessons/EXAMPLE.md`. |
+| `bin/agent-rule` | Pozwala modelowi dopisać krótką regułę do bloku `LEARNED` w `AGENTS.md` (limit 10 linii, z kopią). |
 | `freecode/freecode` | opencode tylko na lokalnych modelach: konfigurator przy pierwszym starcie, kontrola konfiguracji przed każdym startem (opis niżej). |
-| `freecode/przemianuj` | Kopia źródeł opencode z nazwą freecode (`przemianuj ZRODLO CEL`). Czego nie można zmienić (licencja, domeny, repozytoria, zewnętrzne paczki npm, pliki binarne, logo), zapisuje do logu z plikiem i linią. Dodatkowo spisuje wszystkie adresy sieciowe w kodzie. |
+| `freecode/rebrand` | Kopia źródeł opencode z nazwą freecode (`rebrand SOURCE TARGET`; log `TARGET.log.tsv`, podsumowanie `TARGET.summary.md`). Czego nie można zmienić (licencja, domeny, repozytoria, zewnętrzne paczki npm, pliki binarne, logo), zapisuje do logu z plikiem i linią. Dodatkowo spisuje wszystkie adresy sieciowe w kodzie. |
 | `bin/audit-retention` + `systemd/` | Co tydzień przenosi audyt starszy niż 30 dni do archiwum tar. Pliki kasuje dopiero po weryfikacji bajt w bajt. |
 
 ## Instalacja
@@ -58,14 +58,14 @@ Do tego usługa w tle (`opencode serve --service`) trzyma konfigurację z chwili
 
 Co robi:
 
-- **przy pierwszym starcie** odpala konfigurator. Ten wykrywa lokalny serwer (llama.cpp :8080, Ollama :11434, LM Studio :1234, vLLM :8000) i zapisuje bezpieczny `opencode.json`. Do istniejącego pliku proponuje dopisać `enabled_providers` i `small_model`, z kopią zapasową. Ponowne uruchomienie: `freecode --konfiguruj`;
-- **przy każdym starcie** sprawdza wszystkie źródła konfiguracji: globalne, `$OPENCODE_CONFIG`, `$OPENCODE_CONFIG_CONTENT` i pliki projektu aż do korzenia repozytorium. Odmawia startu, jeśli JSON jest uszkodzony albo którykolwiek model czy dostawca nie jest lokalny (localhost, 127.0.0.0/8, ::1, hosty z `FREECODE_HOSTY`);
+- **przy pierwszym starcie** odpala konfigurator. Ten wykrywa lokalny serwer (llama.cpp :8080, Ollama :11434, LM Studio :1234, vLLM :8000) i zapisuje bezpieczny `opencode.json`. Do istniejącego pliku proponuje dopisać `enabled_providers` i `small_model`, z kopią zapasową. Ponowne uruchomienie: `freecode --configure`;
+- **przy każdym starcie** sprawdza wszystkie źródła konfiguracji: globalne, `$OPENCODE_CONFIG`, `$OPENCODE_CONFIG_CONTENT` i pliki projektu aż do korzenia repozytorium. Odmawia startu, jeśli JSON jest uszkodzony albo którykolwiek model czy dostawca nie jest lokalny (localhost, 127.0.0.0/8, ::1, hosty z `FREECODE_HOSTS`);
 - uruchamia opencode z `--standalone`, czyli z własnym serwerem z właśnie sprawdzoną konfiguracją, oraz z `OPENCODE_DISABLE_AUTOUPDATE` i `OPENCODE_DISABLE_MODELS_FETCH`.
 
 ```sh
 freecode                 # TUI
 freecode run "pytanie"   # jednorazowo
-freecode --sprawdz       # tylko kontrola
+freecode --check         # tylko kontrola
 ```
 
 Ograniczenie: freecode nie blokuje sieci. Narzędzia `webfetch`/`websearch` i serwery MCP nadal mogą łączyć się z internetem, a pilnowana jest tylko wysyłka promptów do modeli.
@@ -98,16 +98,16 @@ Wtyczki działają bez tego pliku. Żeby model sam zapisywał wnioski i reguły,
 
 ```markdown
 ## Błędy narzędzi
-Zanim zaczniesz szukać przyczyny błędu narzędzia, sprawdź `~/bin/lesson-note szukaj "komunikat"`.
-Gdy rozwiążesz nowy błąd, zapisz wniosek: `~/bin/lesson-note dodaj "OBJAW" "PRZYCZYNA" "NAPRAWA" "PRZYKŁAD"`.
+Zanim zaczniesz szukać przyczyny błędu narzędzia, sprawdź `~/bin/lesson-note search "komunikat"`.
+Gdy rozwiążesz nowy błąd, zapisz wniosek: `~/bin/lesson-note add "OBJAW" "PRZYCZYNA" "NAPRAWA" "PRZYKŁAD"`.
 
 ## Reguły wyuczone
-Jedyne miejsce, w którym możesz sam dopisać regułę, i tylko poleceniem `~/bin/agent-rule dodaj "co robić + przykład"`.
-<!-- WYUCZONE:START -->
-<!-- WYUCZONE:END -->
+Jedyne miejsce, w którym możesz sam dopisać regułę, i tylko poleceniem `~/bin/agent-rule add "co robić + przykład"`.
+<!-- LEARNED:START -->
+<!-- LEARNED:END -->
 ```
 
-Bez znaczników `WYUCZONE` polecenie `agent-rule` odmawia zapisu.
+Bez znaczników `LEARNED` polecenie `agent-rule` odmawia zapisu. Starsze nazwy (`WYUCZONE`, `dodaj`, `szukaj`, `--sprawdz`, `FREECODE_HOSTY`) nadal działają.
 
 ## Gdzie co ląduje
 
@@ -130,6 +130,15 @@ Ten sam test uruchamia GitHub Actions przy każdym pushu (`.github/workflows/tes
 ```sh
 docker run --rm -v "$PWD":/repo:ro archlinux bash -c 'pacman -Syu --noconfirm --needed nodejs npm python curl diffutils >/dev/null && npm i -g --ignore-scripts=false @opencode/cli@2.0.24 >/dev/null && (cd "$(npm root -g)/@opencode/cli" && node postinstall.mjs) && cp -r /repo /tmp/oc && /tmp/oc/tests/e2e.sh'
 ```
+
+Testy zachowania wtyczek (`tool-input-fix`, `no-call-guard`) nie potrzebują kontenera ani opencode, tylko Node 22:
+
+```sh
+tests/plugins/run.sh              # wtyczki z repo
+tests/plugins/run.sh ~/.config/opencode/plugins   # wtyczki zainstalowane
+```
+
+Każdy test działa na sztucznym katalogu domowym w `/tmp`. Sprawdzają m.in. 92 przypadki poprawek i wskazówek (`tests/plugins/cases.json`, `@HOME@` = katalog domowy), treść wskazówek o zgadywanych ścieżkach, hamulec pętli z eskalacją, STOP przy powtarzanym „No changes to apply”, dostarczanie wskazówek dla read/edit/write w wyniku wywołania i wskazówkę „najpierw wczytaj plik”. Wskazówki dla `ls`/`cat`/`find`/`cp` rozpoznają ścieżki bezwzględne tylko w postaci `/home/<user>/…`, dlatego te przypadki są zapisane jako `~/…`.
 
 ## API wtyczek opencode 2.0.24 (zmierzone, nie z dokumentacji)
 

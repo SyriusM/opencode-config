@@ -23,8 +23,8 @@ function log(line: string) {
 // Przed każdą zmianą pliku konfiguracji opencode / skilla / usługi zapisujemy jego poprzednią wersję do
 // ~/oc-audyt/auto-kopie/ŚCIEŻKA__Z__PODKREŚLENIAMI.RRRRMMDD-GGMMSS — niezależnie od tego, czy model o tym pamięta.
 // Przywracanie: ~/bin/oc-kopie. Nigdy nie blokujemy narzędzia i nigdy nie rzucamy.
-const KOPIE = join(HOME, "oc-audyt", "auto-kopie")
-const CHRONIONE = [
+const BACKUP_DIR = join(HOME, "oc-audyt", "auto-kopie")
+const PROTECTED = [
   /^\.config\/opencode\/(AGENTS\.md|opencode\.json|cli\.json)$/,
   /^\.config\/opencode\/(prompts|command)\/[^/]+$/,
   /^\.config\/opencode\/plugins\/(?!.*node_modules).+\.(ts|tsx|js|json)$/,
@@ -36,7 +36,7 @@ const CHRONIONE = [
   /^oc-audyt\/(przypadki-[\w-]+\.json|test-wtyczki\.(sh|mjs)|straznik-wtyczki\.sh|powtorka-historii\.sh|licznik-bledow\.py)$/,
 ]
 
-function pelnaSciezka(v: unknown): string | undefined {
+function fullPath(v: unknown): string | undefined {
   if (typeof v !== "string" || !v) return undefined
   let s = v.trim()
   if (s === "~" || s.startsWith("~/")) s = HOME + s.slice(1)
@@ -44,32 +44,32 @@ function pelnaSciezka(v: unknown): string | undefined {
   return join(s) // normalizacja ../
 }
 
-function chroniona(abs: string): boolean {
+function isProtected(abs: string): boolean {
   if (!abs.startsWith(HOME + "/")) return false
   const rel = abs.slice(HOME.length + 1)
   if (/\.bak[-.]|\/auto-kopie\//.test(rel)) return false
-  return CHRONIONE.some((re) => re.test(rel))
+  return PROTECTED.some((re) => re.test(rel))
 }
 
-function kopiaPliku(abs: string): string | undefined {
+function backupFile(abs: string): string | undefined {
   try {
-    if (!chroniona(abs) || !existsSync(abs)) return undefined
+    if (!isProtected(abs) || !existsSync(abs)) return undefined
     const st = statSync(abs)
     if (!st.isFile() || st.size > 2_000_000) return undefined
-    mkdirSync(KOPIE, { recursive: true })
-    const baza = "H__" + abs.slice(HOME.length + 1).replace(/\//g, "__")
-    const istniejace = readdirSync(KOPIE).filter((f) => f.startsWith(baza + ".")).sort()
-    const ostatnia = istniejace[istniejace.length - 1]
+    mkdirSync(BACKUP_DIR, { recursive: true })
+    const base = "H__" + abs.slice(HOME.length + 1).replace(/\//g, "__")
+    const existing = readdirSync(BACKUP_DIR).filter((f) => f.startsWith(base + ".")).sort()
+    const latest = existing[existing.length - 1]
     // bez duplikatów: ta sama treść co ostatnia kopia = nic nie rób
-    if (ostatnia && readFileSync(join(KOPIE, ostatnia)).equals(readFileSync(abs))) return undefined
+    if (latest && readFileSync(join(BACKUP_DIR, latest)).equals(readFileSync(abs))) return undefined
     const d = new Date()
     const p2 = (n: number) => String(n).padStart(2, "0")
-    const znacznik = `${d.getFullYear()}${p2(d.getMonth() + 1)}${p2(d.getDate())}-${p2(d.getHours())}${p2(d.getMinutes())}${p2(d.getSeconds())}`
-    const cel = join(KOPIE, `${baza}.${znacznik}`)
-    copyFileSync(abs, cel)
+    const stamp = `${d.getFullYear()}${p2(d.getMonth() + 1)}${p2(d.getDate())}-${p2(d.getHours())}${p2(d.getMinutes())}${p2(d.getSeconds())}`
+    const target = join(BACKUP_DIR, `${base}.${stamp}`)
+    copyFileSync(abs, target)
     // najwyżej 30 kopii na plik
-    for (const stara of istniejace.slice(0, Math.max(0, istniejace.length - 29))) unlinkSync(join(KOPIE, stara))
-    return cel
+    for (const old of existing.slice(0, Math.max(0, existing.length - 29))) unlinkSync(join(BACKUP_DIR, old))
+    return target
   } catch {
     return undefined
   }
@@ -78,19 +78,19 @@ function kopiaPliku(abs: string): string | undefined {
 // Zwraca listę wykonanych kopii. Narzędzia plikowe: po kluczu path. Shell: każde słowo polecenia sprawdzamy
 // jako ścieżkę względem katalogu domowego, katalogu roboczego sesji i wszystkich katalogów z `cd …` w poleceniu
 // (modele piszą `cd ~/.config/opencode && sed -i … AGENTS.md`). kopiaPliku() sama odrzuca pliki niechronione.
-function autoKopia(tool: string, input: any, cwd?: string): string[] {
-  const zrobione: string[] = []
-  const widziane = new Set<string>()
-  const dodajAbs = (abs: string | undefined) => {
-    if (!abs || widziane.has(abs)) return
-    widziane.add(abs)
-    const k = kopiaPliku(abs)
-    if (k) zrobione.push(k)
+function autoBackup(tool: string, input: any, cwd?: string): string[] {
+  const done: string[] = []
+  const seen = new Set<string>()
+  const addAbs = (abs: string | undefined) => {
+    if (!abs || seen.has(abs)) return
+    seen.add(abs)
+    const k = backupFile(abs)
+    if (k) done.push(k)
   }
   try {
-    if (!input || typeof input !== "object") return zrobione
-    const baza = typeof cwd === "string" && cwd.startsWith("/") ? cwd : HOME
-    const wzgledem = (dir: string, v: string) => {
+    if (!input || typeof input !== "object") return done
+    const base = typeof cwd === "string" && cwd.startsWith("/") ? cwd : HOME
+    const relativeTo = (dir: string, v: string) => {
       let t = v.replace(/^\$HOME|^\$\{HOME\}/, HOME)
       if (t === "~" || t.startsWith("~/")) t = HOME + t.slice(1)
       return t.startsWith("/") ? join(t) : join(dir, t)
@@ -99,31 +99,31 @@ function autoKopia(tool: string, input: any, cwd?: string): string[] {
       for (const k of ["path", "filePath", "file_path", "source", "destination"]) {
         const v = input[k]
         if (typeof v !== "string" || !v) continue
-        dodajAbs(wzgledem(baza, v))
-        if (baza !== HOME) dodajAbs(wzgledem(HOME, v))
+        addAbs(relativeTo(base, v))
+        if (base !== HOME) addAbs(relativeTo(HOME, v))
       }
     } else if (/^(shell|bash|fish)$/.test(tool) && typeof input.command === "string") {
       const cmd: string = input.command
       // jedno polecenie tylko do odczytu → bez kopii
-      if (/^\s*(cat|grep|rg|ls|head|tail|wc|diff|stat|file|less|find|du)\b[^|;&>]*$/.test(cmd)) return zrobione
-      const slowa = cmd.split(/[\s"'`;|&<>()=]+/).filter((w) => w && !w.startsWith("-") && w.length < 300)
+      if (/^\s*(cat|grep|rg|ls|head|tail|wc|diff|stat|file|less|find|du)\b[^|;&>]*$/.test(cmd)) return done
+      const words = cmd.split(/[\s"'`;|&<>()=]+/).filter((w) => w && !w.startsWith("-") && w.length < 300)
       // katalogi robocze: start + kolejne `cd X` (każdy liczony względem poprzedniego)
-      const katalogi = [baza]
-      if (baza !== HOME) katalogi.push(HOME)
-      let biezacy = baza
-      for (let n = 0; n < slowa.length - 1; n++) {
-        if (slowa[n] === "cd" || slowa[n] === "pushd") {
-          biezacy = wzgledem(biezacy, slowa[n + 1])
-          katalogi.push(biezacy)
+      const dirs = [base]
+      if (base !== HOME) dirs.push(HOME)
+      let current = base
+      for (let n = 0; n < words.length - 1; n++) {
+        if (words[n] === "cd" || words[n] === "pushd") {
+          current = relativeTo(current, words[n + 1])
+          dirs.push(current)
         }
       }
-      for (const w of slowa) {
+      for (const w of words) {
         if (!/[./~$]/.test(w)) continue // interesują nas tylko słowa wyglądające na ścieżkę albo plik z rozszerzeniem
-        for (const d of katalogi) dodajAbs(wzgledem(d, w))
+        for (const d of dirs) addAbs(relativeTo(d, w))
       }
     }
   } catch {}
-  return zrobione
+  return done
 }
 
 export default {
@@ -133,11 +133,11 @@ export default {
       try {
         const tool = String(ev.tool ?? "")
         const input = ev.input
-        for (const k of autoKopia(tool, input, ev.directory ?? ev.cwd ?? input?.cwd ?? input?.workdir)) log(`KOPIA ${tool} → ${k}`)
+        for (const k of autoBackup(tool, input, ev.directory ?? ev.cwd ?? input?.cwd ?? input?.workdir)) log(`BACKUP ${tool} → ${k}`)
       } catch (e) {
-        log(`auto-kopie hook failed: ${e}`)
+        log(`auto-backup hook failed: ${e}`)
       }
     })
-    log("auto-kopie loaded")
+    log("auto-backup loaded")
   },
 }

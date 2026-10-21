@@ -4,17 +4,17 @@
 # Przenoś, nie kasuj: bez udanej weryfikacji nic nie znika.
 set -euo pipefail
 AUDIT="$HOME/mempalace/audit"
-ARCH="$HOME/mempalace/audit-archive"
-DNI="${1:-30}"
-mkdir -p "$ARCH"
-mapfile -t PLIKI < <(cd "$AUDIT" && find . -type f -name '*.jsonl' -mtime +"$DNI" | sort)
-if [ "${#PLIKI[@]}" -eq 0 ]; then echo "audit-retention: nic starszego niż $DNI dni"; exit 0; fi
-TAR="$ARCH/audit-$(date +%Y%m%d-%H%M%S).tar.gz"
-tar -C "$AUDIT" -czf "$TAR" "${PLIKI[@]}"
+ARCHIVE="$HOME/mempalace/audit-archive"
+DAYS="${1:-30}"
+mkdir -p "$ARCHIVE"
+mapfile -t FILES < <(cd "$AUDIT" && find . -type f -name '*.jsonl' -mtime +"$DAYS" | sort)
+if [ "${#FILES[@]}" -eq 0 ]; then echo "audit-retention: nothing older than $DAYS days"; exit 0; fi
+TAR="$ARCHIVE/audit-$(date +%Y%m%d-%H%M%S).tar.gz"
+tar -C "$AUDIT" -czf "$TAR" "${FILES[@]}"
 TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
 tar -C "$TMP" -xzf "$TAR"
-for f in "${PLIKI[@]}"; do
-  cmp -s "$AUDIT/$f" "$TMP/$f" || { echo "audit-retention: RÓŻNICA w $f — nic nie skasowano, archiwum $TAR zostaje"; exit 1; }
+for f in "${FILES[@]}"; do
+  cmp -s "$AUDIT/$f" "$TMP/$f" || { echo "audit-retention: MISMATCH in $f — nothing deleted, archive $TAR kept"; exit 1; }
 done
-for f in "${PLIKI[@]}"; do rm -f "$AUDIT/$f"; done
-echo "audit-retention: ${#PLIKI[@]} plików → $TAR (zweryfikowane)"
+for f in "${FILES[@]}"; do rm -f "$AUDIT/$f"; done
+echo "audit-retention: ${#FILES[@]} files → $TAR (verified)"

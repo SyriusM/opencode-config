@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Mock OpenAI-compatible server (SSE): dwa wywołania `read` na nieistniejącym pliku (próg lesson-draft = 2), potem tekst.
+# Mock OpenAI-compatible server (SSE): two `read` calls on a missing file (lesson-draft threshold = 2), then text.
 import http.server, json, os, sys, time
 
 LOG = "/tmp/mock.log"
@@ -16,15 +16,15 @@ class H(http.server.BaseHTTPRequestHandler):
     def do_POST(s):
         body = json.loads(s.rfile.read(int(s.headers.get("Content-Length", 0))) or b"{}")
         msgs = body.get("messages", [])
-        po_narzedziu = sum(m.get("role") == "tool" for m in msgs) >= 2
+        after_tools = sum(m.get("role") == "tool" for m in msgs) >= 2
         with open("/tmp/mock-body.jsonl", "a") as f:
             f.write(json.dumps(body, ensure_ascii=False) + "\n")
         with open(LOG, "a") as f:
-            f.write(json.dumps({"n": len(msgs), "tool": po_narzedziu, "stream": body.get("stream"),
+            f.write(json.dumps({"n": len(msgs), "tool": after_tools, "stream": body.get("stream"),
                                 "tools": [t["function"]["name"] for t in body.get("tools", [])],
-                                "palace": "ZNACZNIK-PALACE" in json.dumps(msgs, ensure_ascii=False)}) + "\n")
+                                "palace": "PALACE-MARKER" in json.dumps(msgs, ensure_ascii=False)}) + "\n")
         s.send_response(200); s.send_header("Content-Type", "text/event-stream"); s.end_headers()
-        if po_narzedziu:
+        if after_tools:
             parts = [chunk({"role": "assistant", "content": "Pliku nie ma. "}), chunk({"content": "Koniec."}),
                      chunk({}, "stop")]
         else:

@@ -1,5 +1,5 @@
 [Unit]
-Description=Cotygodniowa retencja audytu mempalace
+Description=Weekly retention of the mempalace audit log
 
 [Timer]
 OnCalendar=Mon 04:00

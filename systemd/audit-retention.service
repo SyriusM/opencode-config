@@ -1,0 +1,7 @@
+[Unit]
+Description=Retention of ~/mempalace/audit (archive >30 days, verified)
+
+[Service]
+Type=oneshot
+ExecStart=%h/bin/audit-retention
+Nice=15

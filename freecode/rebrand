@@ -1,0 +1,180 @@
+#!/usr/bin/env python3
+"""rebrand — copy of the opencode sources renamed to freecode; whatever cannot be renamed goes to the log.
+
+  rebrand SOURCE TARGET      SOURCE = opencode git checkout (e.g. tag v2.0.24), TARGET = new directory
+
+Replaces in file contents and paths (variants have the same length, nothing shifts):
+  opencode→freecode  OpenCode→FreeCode  OPENCODE→FREECODE  Opencode→Freecode  openCode→freeCode
+
+Does NOT replace (every occurrence is logged with file and line):
+  LICENSE    license files — MIT requires keeping the copyright notice
+  DOMAIN     addresses with the name in the domain (opencode.ai…) — renaming would point to a foreign/nonexistent domain
+  REPO       source repository addresses (github.com/anomalyco/opencode)
+  PACKAGE    npm packages from outside the repository (@opencode-ai/sdk…) — they install from the registry under this name
+  BINARY     binary files containing the name (images, fonts)
+  LOGO       files with "logo" in the path — artwork to redo by hand (a name inside an image is not text)
+Additionally NETWORK: every http(s)/ws(s) address in code (excluding tests and docs) — map of outgoing connections.
+
+Output: TARGET/ (git-tracked files only) + TARGET.log.tsv (category, file, line, fragment) + TARGET.summary.md
+"""
+import collections
+import json
+import os
+import re
+import subprocess
+import sys
+
+REPLACEMENTS = [("opencode", "freecode"), ("OpenCode", "FreeCode"), ("OPENCODE", "FREECODE"),
+                ("Opencode", "Freecode"), ("openCode", "freeCode")]
+PATTERN = re.compile("|".join(re.escape(a) for a, _ in REPLACEMENTS))
+MAPPING = dict(REPLACEMENTS)
+NAME = re.compile("opencode", re.I)
+DOMAIN = re.compile(r"(?:[a-z0-9-]+\.)*[a-z0-9-]*opencode[a-z0-9-]*\.(?:ai|com|dev|io|net|org|app|sh)\b", re.I)
+REPO = re.compile(r"github\.com[/:][A-Za-z0-9_.-]+/opencode(?:-[A-Za-z0-9_-]+)?(?:\.git)?", re.I)
+URL = re.compile(r"\b(?:https?|wss?)://[^\s\"'`<>)\]}]+")
+LICENSE = re.compile(r"(^|/)(LICEN[CS]E|COPYING|NOTICE)(\.[a-z]+)?$", re.I)
+NOT_CODE = re.compile(r"(^|/)(test|tests|__tests__|fixtures?|docs?|specs?|examples?|storybook)(/|$)|\.(md|mdx|snap|test\.\w+|spec\.\w+)$", re.I)
+
+
+def replace(t):
+    return PATTERN.sub(lambda m: MAPPING[m.group(0)], t)
+
+
+def git_files(source):
+    r = subprocess.run(["git", "-C", source, "ls-files", "-z"], capture_output=True, check=True)
+    return [p for p in r.stdout.decode("utf-8").split("\0") if p]
+
+
+def external_packages(source, files):
+    """Package names containing "opencode" that something depends on but that are not in the repository."""
+    own, deps = set(), set()
+    for p in files:
+        if not p.endswith("package.json"):
+            continue
+        try:
+            d = json.load(open(os.path.join(source, p), encoding="utf-8"))
+        except (ValueError, OSError):
+            continue
+        if isinstance(d.get("name"), str):
+            own.add(d["name"])
+        for k in ("dependencies", "devDependencies", "peerDependencies", "optionalDependencies"):
+            deps.update((d.get(k) or {}).keys())
+    return sorted((n for n in deps - own if NAME.search(n)), key=len, reverse=True)
+
+
+def main(argv):
+    if len(argv) != 2 or argv[0] in ("-h", "--help"):
+        print(__doc__.strip()); return 2
+    source, target = (os.path.abspath(a) for a in argv)
+    if os.path.exists(target):
+        print(f"{target} already exists — give a new directory", file=sys.stderr); return 1
+    files = git_files(source)
+    external = external_packages(source, files)
+    protected = [("REPO", REPO), ("DOMAIN", DOMAIN)]
+    if external:
+        protected.insert(0, ("PACKAGE", re.compile("|".join(re.escape(n) for n in external))))
+
+    log, counts = [], collections.Counter()
+    changed_files = changed_paths = 0
+
+    def add_log(cat, path, line, frag):
+        log.append((cat, path, line, frag.replace("\t", " ").strip()[:200]))
+        counts[cat] += 1
+
+    for p in files:
+        src = os.path.join(source, p)
+        if os.path.islink(src) or not os.path.isfile(src):
+            continue
+        new_path = replace(p)
+        if new_path != p:
+            changed_paths += 1
+        dst = os.path.join(target, new_path)
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        data = open(src, "rb").read()
+        if re.search(r"logo", p, re.I):
+            add_log("LOGO", new_path, 0, "artwork/mark — check and redraw by hand")
+        try:
+            text = data.decode("utf-8")
+        except UnicodeDecodeError:
+            if NAME.search(data.decode("latin-1")):
+                add_log("BINARY", new_path, 0, f"{len(NAME.findall(data.decode('latin-1')))}× name in binary file")
+            open(dst, "wb").write(data)
+            os.chmod(dst, os.stat(src).st_mode & 0o777)
+            continue
+
+        if LICENSE.search(p):
+            for i, l in enumerate(text.splitlines(), 1):
+                if NAME.search(l):
+                    add_log("LICENSE", new_path, i, l)
+            new_text = text
+        else:
+            lines = text.split("\n")
+            for i, l in enumerate(lines):
+                if not NAME.search(l) and not ("://" in l and not NOT_CODE.search(p)):
+                    continue
+                if not NOT_CODE.search(p):
+                    for u in URL.findall(l):
+                        add_log("NETWORK", new_path, i + 1, u)
+                if not NAME.search(l):
+                    continue
+                # protected fragments → placeholders, replace the rest, restore
+                stash = []
+
+                def hide(m, cat):
+                    add_log(cat, new_path, i + 1, m.group(0))
+                    stash.append(m.group(0))
+                    return f"\0{len(stash) - 1}\0"
+
+                for cat, rx in protected:
+                    l = rx.sub(lambda m, k=cat: hide(m, k), l)
+                l = replace(l)
+                l = re.sub(r"\0(\d+)\0", lambda m: stash[int(m.group(1))], l)
+                lines[i] = l
+            new_text = "\n".join(lines)
+        if new_text != text:
+            changed_files += 1
+        open(dst, "w", encoding="utf-8", newline="").write(new_text)
+        os.chmod(dst, os.stat(src).st_mode & 0o777)
+
+    # check: every remaining occurrence of the name must be in the log
+    remaining = collections.Counter()
+    for cat, path, line, frag in log:
+        if cat != "NETWORK" and cat != "LOGO":
+            remaining[path] += len(NAME.findall(frag)) if cat != "BINARY" else 0
+    unlogged = []
+    for root, _, fs in os.walk(target):
+        for f in fs:
+            pth = os.path.join(root, f); rel = os.path.relpath(pth, target)
+            try:
+                t = open(pth, encoding="utf-8").read()
+            except (UnicodeDecodeError, OSError):
+                continue
+            n = len(NAME.findall(t))
+            if n > remaining.get(rel, 0):
+                unlogged.append((rel, n - remaining.get(rel, 0)))
+            if NAME.search(rel):
+                unlogged.append((rel, "name in path"))
+    for rel, n in unlogged:
+        add_log("UNLOGGED", rel, 0, f"{n} occurrences outside the log — rebrand bug")
+
+    with open(target + ".log.tsv", "w", encoding="utf-8") as f:
+        f.write("category\tfile\tline\tfragment\n")
+        for w in sorted(log):
+            f.write("\t".join(map(str, w)) + "\n")
+    hosts = collections.Counter(re.sub(r"^\w+://([^/:?#]+).*", r"\1", u) for k, _, _, u in log if k == "NETWORK")
+    with open(target + ".summary.md", "w", encoding="utf-8") as f:
+        f.write(f"# rebrand: {source} → {target}\n\n")
+        f.write(f"- files: {len(files)}, changed contents: {changed_files}, changed paths: {changed_paths}\n")
+        f.write(f"- external packages (untouched): {', '.join(external) or 'none'}\n\n## Not replaced (details in {os.path.basename(target)}.log.tsv)\n\n")
+        for cat in ("LICENSE", "DOMAIN", "REPO", "PACKAGE", "BINARY", "LOGO", "UNLOGGED"):
+            f.write(f"- {cat}: {counts.get(cat, 0)}\n")
+        f.write(f"\n## Network addresses in code (NETWORK: {counts.get('NETWORK', 0)} occurrences, {len(hosts)} hosts)\n\n")
+        for h, n in hosts.most_common():
+            f.write(f"- {h} ({n})\n")
+    print(open(target + ".summary.md", encoding="utf-8").read().split("## Network")[0].strip())
+    print(f"hosts in code: {len(hosts)} (list: {target}.summary.md)")
+    return 1 if unlogged else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

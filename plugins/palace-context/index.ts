@@ -13,8 +13,8 @@ import { execFile } from "node:child_process"
 
 const HOME = homedir()
 const LOG = join(HOME, ".mempalace", "hook_state", "palace_context.log")
-const SKRYPT = join(HOME, "bin", "palace-context")
-const WAZNOSC_MS = 10 * 60_000
+const SCRIPT = join(HOME, "bin", "palace-context")
+const TTL_MS = 10 * 60_000
 
 function log(line: string) {
   try {
@@ -23,26 +23,26 @@ function log(line: string) {
   } catch {}
 }
 
-const cache = new Map<string, { czas: number; tekst: string }>()
-const wToku = new Map<string, Promise<string>>()
+const cache = new Map<string, { time: number; text: string }>()
+const inFlight = new Map<string, Promise<string>>()
 
-function pobierz(katalog: string): Promise<string> {
-  const c = cache.get(katalog)
-  if (c && Date.now() - c.czas < WAZNOSC_MS) return Promise.resolve(c.tekst)
-  const trwa = wToku.get(katalog)
-  if (trwa) return trwa
+function fetchContext(dir: string): Promise<string> {
+  const c = cache.get(dir)
+  if (c && Date.now() - c.time < TTL_MS) return Promise.resolve(c.text)
+  const pending = inFlight.get(dir)
+  if (pending) return pending
   const p = new Promise<string>((resolve) => {
-    execFile(SKRYPT, [katalog], { timeout: 15_000, maxBuffer: 64 * 1024 }, (err, stdout) => {
-      const tekst = err ? "" : String(stdout).trim()
-      if (err) log(`skrypt padł dla ${katalog}: ${String(err).slice(0, 200)}`)
+    execFile(SCRIPT, [dir], { timeout: 15_000, maxBuffer: 64 * 1024 }, (err, stdout) => {
+      const ctxText = err ? "" : String(stdout).trim()
+      if (err) log(`script failed for ${dir}: ${String(err).slice(0, 200)}`)
       if (cache.size > 100) cache.clear()
-      cache.set(katalog, { czas: Date.now(), tekst })
-      wToku.delete(katalog)
-      log(`pobrano ${katalog}: ${tekst.length} znaków`)
-      resolve(tekst)
+      cache.set(dir, { time: Date.now(), text: ctxText })
+      inFlight.delete(dir)
+      log(`fetched ${dir}: ${ctxText.length} chars`)
+      resolve(ctxText)
     })
   })
-  wToku.set(katalog, p)
+  inFlight.set(dir, p)
   return p
 }
 
@@ -50,39 +50,39 @@ export default {
   id: "palace-context",
   async setup(ctx: any) {
     // V2: katalog sesji w ctx.location.directory (instancja wtyczki na lokalizację); cwd procesu to zwykle ~
-    const domyslny = String(ctx?.location?.directory ?? process.cwd())
-    log(`plugin-load ctx=[${Object.keys(ctx ?? {}).join(",")}] katalog=${domyslny}`)
-    void pobierz(domyslny) // rozgrzanie, zanim padnie pierwsze pytanie
+    const defaultDir = String(ctx?.location?.directory ?? process.cwd())
+    log(`plugin-load ctx=[${Object.keys(ctx ?? {}).join(",")}] dir=${defaultDir}`)
+    void fetchContext(defaultDir) // rozgrzanie, zanim padnie pierwsze pytanie
 
     if (typeof ctx?.session?.hook !== "function") {
-      log("BRAK ctx.session.hook — wtyczka nic nie robi")
+      log("NO ctx.session.hook — plugin does nothing")
       return
     }
-    let pokazano = false
-    const zalogowane = new Set<string>()
+    let shown = false
+    const logged = new Set<string>()
     await ctx.session.hook("context", async (p: any) => {
       try {
-        if (!pokazano) {
-          pokazano = true
-          log(`kształt context: [${Object.keys(p ?? {}).join(",")}] system=${Array.isArray(p?.system) ? p.system.length : typeof p?.system}`)
+        if (!shown) {
+          shown = true
+          log(`context shape: [${Object.keys(p ?? {}).join(",")}] system=${Array.isArray(p?.system) ? p.system.length : typeof p?.system}`)
         }
         if (!Array.isArray(p?.system)) return
-        const katalog = domyslny
+        const dir = defaultDir
         // czekamy najwyżej 3 s; jak nie zdąży, kontekst dojdzie przy następnym wywołaniu
-        const tekst = await Promise.race([pobierz(katalog), new Promise<string>((r) => setTimeout(() => r(""), 3000))])
-        if (tekst) {
-          p.system.push({ type: "text", text: tekst })
+        const ctxText = await Promise.race([fetchContext(dir), new Promise<string>((r) => setTimeout(() => r(""), 3000))])
+        if (ctxText) {
+          p.system.push({ type: "text", text: ctxText })
           const sid = String(p?.sessionID)
-          if (!zalogowane.has(sid)) {
-            if (zalogowane.size > 1000) zalogowane.clear()
-            zalogowane.add(sid)
-            log(`doklejono ${tekst.length} zn. session=${sid}`)
+          if (!logged.has(sid)) {
+            if (logged.size > 1000) logged.clear()
+            logged.add(sid)
+            log(`appended ${ctxText.length} chars session=${sid}`)
           }
         }
       } catch (e) {
-        log(`hook context padł: ${String(e).slice(0, 200)}`)
+        log(`context hook failed: ${String(e).slice(0, 200)}`)
       }
     })
-    log("hook context zarejestrowany")
+    log("context hook registered")
   },
 }

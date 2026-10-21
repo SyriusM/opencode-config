@@ -12,38 +12,38 @@ import socket
 import sys
 from pathlib import Path
 
-PROG = 0.57          # minimalne podobieństwo (bge-m3); niżej to szum
-MAX_WYNIKOW = 3
-MAX_ZNAKOW = 350     # na jeden wynik
+THRESHOLD = 0.57          # minimalne podobieństwo (bge-m3); niżej to szum
+MAX_RESULTS = 3
+MAX_CHARS = 350     # na jeden wynik
 
 
-def konfig() -> dict:
+def read_config() -> dict:
     """Opcjonalny $XDG_CONFIG_HOME/opencode-config/config, domyślnie ~/.config (KEY=VALUE, pisze go install.sh)."""
     k = {}
     try:
-        for linia in (Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "opencode-config" / "config").read_text().splitlines():
-            if "=" in linia and not linia.lstrip().startswith("#"):
-                a, b = linia.split("=", 1)
+        for line in (Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "opencode-config" / "config").read_text().splitlines():
+            if "=" in line and not line.lstrip().startswith("#"):
+                a, b = line.split("=", 1)
                 k[a.strip()] = b.strip().strip('"')
     except OSError:
         pass
     return k
 
 
-K = konfig()
+K = read_config()
 # port serwera embeddingów do kontroli zdrowia; 0/puste = bez kontroli (np. embeddingi lokalne chromadb)
 PORT = int(K.get("PALACE_EMBED_PORT", "0") or 0)
 # TYLKO te skrzydła (bez dzienników, rozmów i spraw osobistych — model ma przeglądarkę i formularze); "*" = wszystkie
 _w = K.get("PALACE_WINGS", "*")
-TECHNICZNE = None if _w.strip() == "*" else {x.strip() for x in _w.split(",") if x.strip()}
+ALLOWED_WINGS = None if _w.strip() == "*" else {x.strip() for x in _w.split(",") if x.strip()}
 MEMPALACE_SRC = os.path.expanduser(K.get("MEMPALACE_SRC", "~/mempalace"))
 debug = "--debug" in sys.argv
 args = [a for a in sys.argv[1:] if not a.startswith("--")]
-katalog = Path(args[0] if args else os.getcwd()).resolve()
+directory = Path(args[0] if args else os.getcwd()).resolve()
 home = Path.home()
 
 
-def port_zyje(port: int) -> bool:
+def port_alive(port: int) -> bool:
     try:
         with socket.create_connection(("127.0.0.1", port), timeout=1):
             return True
@@ -51,12 +51,12 @@ def port_zyje(port: int) -> bool:
         return False
 
 
-if PORT and not port_zyje(PORT):
+if PORT and not port_alive(PORT):
     print(f"PALACE: embeddingi (:{PORT}) nie odpowiadają — mempalace_search zwróci pusto albo błąd. "
           "Pusty wynik ≠ brak wiedzy; powiedz użytkownikowi, że palace jest niedostępny.")
     sys.exit(0)
 
-if katalog in (home, Path("/"), Path("/tmp")) or home not in katalog.parents:
+if directory in (home, Path("/"), Path("/tmp")) or home not in directory.parents:
     sys.exit(0)
 
 if os.path.isdir(os.path.join(MEMPALACE_SRC, "mempalace")):
@@ -66,38 +66,38 @@ _stdout_fd = os.dup(1)
 sys.stdout, _out = open(os.devnull, "w"), sys.stdout  # mempalace drukuje telemetrię
 try:
     from mempalace import mcp_server as m
-    rel = str(katalog.relative_to(home))
-    zapytanie = f"{katalog.name} — projekt w ~/{rel}: stan, decyzje, problemy"
-    r = m.tool_search(zapytanie, limit=30)
-    wyniki = r.get("results", []) if isinstance(r, dict) else []
+    rel = str(directory.relative_to(home))
+    query = f"{directory.name} — projekt w ~/{rel}: stan, decyzje, problemy"
+    r = m.tool_search(query, limit=30)
+    results = r.get("results", []) if isinstance(r, dict) else []
 except Exception as e:  # noqa: BLE001
     sys.stdout = _out
     os.write(_stdout_fd, f"PALACE: wyszukiwanie padło ({type(e).__name__}) — palace może być niedostępny.\n".encode())
     sys.exit(0)
 sys.stdout = _out
 
-def szum(w: dict) -> bool:
+def is_noise(w: dict) -> bool:
     # entities.json pasuje do wszystkiego, surowe transkrypty (.jsonl) to rozmowa, nie fakty
-    zr = str(w.get("source_file", ""))
-    tekst = str(w.get("text", "")).strip()
-    if (TECHNICZNE is not None and w.get("wing") not in TECHNICZNE) or "diary" in str(w.get("room", "")):
+    source = str(w.get("source_file", ""))
+    text = str(w.get("text", "")).strip()
+    if (ALLOWED_WINGS is not None and w.get("wing") not in ALLOWED_WINGS) or "diary" in str(w.get("room", "")):
         return True
-    return (zr == "entities.json" or zr.endswith(".jsonl") or w.get("wing") == "_quarantine"
-            or len(tekst) < 80 or tekst.startswith("[tool:"))
+    return (source == "entities.json" or source.endswith(".jsonl") or w.get("wing") == "_quarantine"
+            or len(text) < 80 or text.startswith("[tool:"))
 
 
-wybrane = [w for w in wyniki if w.get("similarity", 0) >= PROG and not szum(w)][:MAX_WYNIKOW]
+selected = [w for w in results if w.get("similarity", 0) >= THRESHOLD and not is_noise(w)][:MAX_RESULTS]
 if debug:
-    for w in wyniki:
+    for w in results:
         print(f"# {w.get('similarity')} {w.get('wing')}/{w.get('room')} {w.get('topic')}", file=sys.stderr)
-if not wybrane:
+if not selected:
     sys.exit(0)
 
-linie = [f"PALACE (tło z pamięci dla ~/{rel}; to notatki z przeszłości — stan sprawdzaj, zanim na nich oprzesz decyzję; "
+lines = [f"PALACE (tło z pamięci dla ~/{rel}; to notatki z przeszłości — stan sprawdzaj, zanim na nich oprzesz decyzję; "
          "więcej: mempalace_search):"]
-for w in wybrane:
-    tekst = " ".join(str(w.get("text", "")).split())
-    if len(tekst) > MAX_ZNAKOW:
-        tekst = tekst[:MAX_ZNAKOW].rsplit(" ", 1)[0] + " …"
-    linie.append(f"- [{w.get('wing')}/{w.get('room')}] {tekst}")
-os.write(_stdout_fd, ("\n".join(linie) + "\n").encode())
+for w in selected:
+    text = " ".join(str(w.get("text", "")).split())
+    if len(text) > MAX_CHARS:
+        text = text[:MAX_CHARS].rsplit(" ", 1)[0] + " …"
+    lines.append(f"- [{w.get('wing')}/{w.get('room')}] {text}")
+os.write(_stdout_fd, ("\n".join(lines) + "\n").encode())

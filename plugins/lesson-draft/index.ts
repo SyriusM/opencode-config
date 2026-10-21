@@ -124,14 +124,14 @@ export default {
 
     // V2 (2.0.24): brak ctx.client — błędy zbieramy wprost ze strumienia zdarzeń session.tool.*,
     // a analizujemy na końcu tury (session.execution.succeeded/failed; session.idle nie istnieje).
-    let pokazanoKsztalt = false
-    let pokazanoCalled = false
-    let pokazanoInput = false
+    let shownShape = false
+    let shownCalled = false
+    let shownInput = false
     const g = globalThis as any
     // wspólne dla wszystkich instancji (jedna na lokalizację) — zdarzenie obsługuje ta, która zobaczy je pierwsza
-    const widziane: Set<string> = (g.__lessonDraftWidziane ??= new Set<string>())
-    const bufor: Map<string, Array<{ type: string; parts: any[] }>> = (g.__lessonDraftBufor ??= new Map())
-    const nazwyNarzedzi: Map<string, string> = (g.__lessonDraftNazwy ??= new Map()) // id wywołania → nazwa narzędzia
+    const seen: Set<string> = (g.__lessonDraftSeen ??= new Set<string>())
+    const buffer: Map<string, Array<{ type: string; parts: any[] }>> = (g.__lessonDraftBuffer ??= new Map())
+    const toolNames: Map<string, string> = (g.__lessonDraftToolNames ??= new Map()) // id wywołania → nazwa narzędzia
     void (async () => {
       try {
         for await (const event of ctx.event.subscribe({ signal: controller.signal })) {
@@ -140,48 +140,48 @@ export default {
           if (!sessionID) continue
           // wtyczka ma instancję na każdą lokalizację, a strumień jest wspólny — każde zdarzenie raz
           if (ev.id) {
-            if (widziane.has(ev.id)) continue
-            if (widziane.size > 20000) widziane.clear()
-            widziane.add(ev.id)
+            if (seen.has(ev.id)) continue
+            if (seen.size > 20000) seen.clear()
+            seen.add(ev.id)
           }
           if (event.type === "session.tool.input.started" || event.type === "session.tool.input.ended") {
             const d = ev.data ?? {}
-            if (!pokazanoInput) { pokazanoInput = true; log(`kształt ${event.type}: ${JSON.stringify(d).slice(0, 300)}`) }
-            const nazwa = d.tool ?? d.name ?? d.toolID ?? d.toolName
-            if (d.id && nazwa) { if (nazwyNarzedzi.size > 5000) nazwyNarzedzi.clear(); nazwyNarzedzi.set(String(d.id), String(nazwa)) }
+            if (!shownInput) { shownInput = true; log(`shape ${event.type}: ${JSON.stringify(d).slice(0, 300)}`) }
+            const callToolName = d.tool ?? d.name ?? d.toolID ?? d.toolName
+            if (d.id && callToolName) { if (toolNames.size > 5000) toolNames.clear(); toolNames.set(String(d.id), String(callToolName)) }
             continue
           }
           if (/^session\.tool\./.test(event.type) && !/input\.(started|ended)|progress/.test(event.type)) {
-            if (!/success|called/.test(event.type) && !pokazanoKsztalt) {
-              pokazanoKsztalt = true
-              log(`kształt ${event.type}: ${JSON.stringify(ev.data).slice(0, 400)}`)
+            if (!/success|called/.test(event.type) && !shownShape) {
+              shownShape = true
+              log(`shape ${event.type}: ${JSON.stringify(ev.data).slice(0, 400)}`)
             }
             const d = ev.data ?? {}
             if (event.type === "session.tool.called") {
-              if (!pokazanoCalled) { pokazanoCalled = true; log(`kształt called: ${JSON.stringify(d).slice(0, 300)}`) }
-              const nazwa = d.tool ?? d.name ?? d.toolID ?? d.input?.tool
-              if (d.id && nazwa) { if (nazwyNarzedzi.size > 5000) nazwyNarzedzi.clear(); nazwyNarzedzi.set(String(d.id), String(nazwa)) }
+              if (!shownCalled) { shownCalled = true; log(`shape called: ${JSON.stringify(d).slice(0, 300)}`) }
+              const callToolName = d.tool ?? d.name ?? d.toolID ?? d.input?.tool
+              if (d.id && callToolName) { if (toolNames.size > 5000) toolNames.clear(); toolNames.set(String(d.id), String(callToolName)) }
               continue
             }
             if (/success/.test(event.type)) continue
-            const tool = String(d.tool ?? d.name ?? nazwyNarzedzi.get(String(d.id)) ?? "unknown")
-            if (bufor.size > 50) bufor.clear()
-            const lista = bufor.get(sessionID) ?? []
-            lista.push({ type: "tool", parts: [{ type: "tool", tool, state: d }] })
-            bufor.set(sessionID, lista)
+            const tool = String(d.tool ?? d.name ?? toolNames.get(String(d.id)) ?? "unknown")
+            if (buffer.size > 50) buffer.clear()
+            const list = buffer.get(sessionID) ?? []
+            list.push({ type: "tool", parts: [{ type: "tool", tool, state: d }] })
+            buffer.set(sessionID, list)
             continue
           }
           if (event.type !== "session.idle" && !/^session\.execution\.(succeeded|failed)$/.test(event.type)) continue
-          const lista = bufor.get(sessionID) ?? []
-          const { hits } = analyze(lista.map((x) => ({ info: {}, parts: x.parts })))
-          log(`koniec tury ${sessionID}: błędy narzędzi=${lista.length} trafienia=${hits.length}`)
+          const list = buffer.get(sessionID) ?? []
+          const { hits } = analyze(list.map((x) => ({ info: {}, parts: x.parts })))
+          log(`turn end ${sessionID}: tool errors=${list.length} hits=${hits.length}`)
           if (hits.length > 0) {
             writeDraft(sessionID, hits)
-            bufor.delete(sessionID) // ten sam wzorzec nie wraca w każdej kolejnej turze
+            buffer.delete(sessionID) // ten sam wzorzec nie wraca w każdej kolejnej turze
           }
         }
       } catch (e) {
-        log(`strumień zdarzeń przerwany: ${String(e)}`)
+        log(`event stream aborted: ${String(e)}`)
       }
     })()
 

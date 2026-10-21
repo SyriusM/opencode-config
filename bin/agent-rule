@@ -1,57 +1,66 @@
 #!/usr/bin/env bash
 # Reguły wyuczone w AGENTS.md — jedyne miejsce, w którym model sam dopisuje reguły.
-# Blok między znacznikami <!-- WYUCZONE:START --> i <!-- WYUCZONE:END -->, najwyżej 10 linii, najstarsza wypada.
+# Blok między znacznikami <!-- LEARNED:START --> i <!-- LEARNED:END -->, najwyżej 10 linii, najstarsza wypada.
 #   agent-rule                 pokaż reguły (z numerami)
-#   agent-rule dodaj "TEKST"   dopisz regułę (jedna linia, do 200 znaków, z przykładem wywołania)
-#   agent-rule usun N          usuń regułę nr N
+#   agent-rule add "TEKST"     dopisz regułę (jedna linia, do 200 znaków, z przykładem wywołania)
+#   agent-rule remove N        usuń regułę nr N
 # Przed każdą zmianą zapisuje kopię do ~/oc-audyt/auto-kopie (cofanie: ~/bin/backup-copy).
+# Zgodność wstecz: podkomendy dodaj/usun i znaczniki WYUCZONE:START/END też działają.
 set -u
-PLIK="$HOME/.config/opencode/AGENTS.md"
-KOPIE="$HOME/oc-audyt/auto-kopie"
+FILE="$HOME/.config/opencode/AGENTS.md"
+BACKUP_DIR="$HOME/oc-audyt/auto-kopie"
 MAX=10
-S='<!-- WYUCZONE:START -->'
-E='<!-- WYUCZONE:END -->'
 
-grep -qF "$S" "$PLIK" && grep -qF "$E" "$PLIK" || { echo "Brak znaczników bloku w $PLIK" >&2; exit 1; }
+for tag in LEARNED WYUCZONE; do
+  S="<!-- $tag:START -->"
+  E="<!-- $tag:END -->"
+  grep -qF "$S" "$FILE" && grep -qF "$E" "$FILE" && break
+  S=""
+done
+[ -n "$S" ] || { echo "Brak znaczników bloku <!-- LEARNED:START/END --> w $FILE" >&2; exit 1; }
 
-reguly() { awk -v s="$S" -v e="$E" '$0==s{f=1;next} $0==e{f=0} f && /^- /' "$PLIK"; }
+rules() { awk -v s="$S" -v e="$E" '$0==s{f=1;next} $0==e{f=0} f && /^- /' "$FILE"; }
 
-zapisz() {  # stdin = nowe linie reguł
-  mkdir -p "$KOPIE"
-  cp -p "$PLIK" "$KOPIE/H__.config__opencode__AGENTS.md.$(date +%Y%m%d-%H%M%S)"
-  local nowe tmp
-  nowe=$(cat)
+save() {  # stdin = new rule lines
+  mkdir -p "$BACKUP_DIR"
+  local dst
+  # one backup per second; never overwrite an earlier one
+  while dst="$BACKUP_DIR/H__.config__opencode__AGENTS.md.$(date +%Y%m%d-%H%M%S)"; [ -e "$dst" ]; do sleep 1; done
+  cp -p "$FILE" "$dst"
+  local new tmp
+  new=$(cat)
   tmp=$(mktemp)
-  awk -v s="$S" -v e="$E" -v nowe="$nowe" '
-    $0==s { print; if (nowe != "") print nowe; f=1; next }
+  # ENVIRON, not -v: awk -v expands escapes (С -> Cyrillic letter, \d -> d)
+  NEW_RULES="$new" awk -v s="$S" -v e="$E" '
+    $0==s { print; if (ENVIRON["NEW_RULES"] != "") print ENVIRON["NEW_RULES"]; f=1; next }
     $0==e { f=0 }
-    !f { print }' "$PLIK" > "$tmp" && cat "$tmp" > "$PLIK"
+    !f { print }' "$FILE" > "$tmp" && cat "$tmp" > "$FILE"
   rm -f "$tmp"
 }
 
 case "${1:-}" in
   "")
-    n=$(reguly | wc -l)
+    n=$(rules | wc -l)
     echo "Reguły wyuczone: $n z $MAX"
-    reguly | nl -w2 -s'. '
+    rules | nl -w2 -s'. '
     ;;
-  dodaj)
+  add|dodaj)
     t="${2:-}"
     t=$(printf '%s' "$t" | tr '\n' ' ' | sed 's/  */ /g; s/^ //; s/ $//')
     [ -n "$t" ] || { echo "Podaj tekst reguły w cudzysłowie." >&2; exit 1; }
     [ "${#t}" -le 200 ] || { echo "Za długa (${#t} znaków, limit 200). Skróć: co robić + jeden przykład." >&2; exit 1; }
-    if reguly | grep -qF -- "$t"; then echo "Taka reguła już jest."; exit 0; fi
-    { reguly; echo "- $(date +%F) $t"; } | tail -n "$MAX" | zapisz
-    echo "Dopisano. $(reguly | wc -l) z $MAX reguł, plik $(wc -c < "$PLIK") bajtów. Cofnięcie: ~/bin/backup-copy AGENTS"
+    if rules | grep -qF -- "$t"; then echo "Taka reguła już jest."; exit 0; fi
+    { rules; echo "- $(date +%F) $t"; } | tail -n "$MAX" | save
+    echo "Dopisano. $(rules | wc -l) z $MAX reguł, plik $(wc -c < "$FILE") bajtów. Cofnięcie: ~/bin/backup-copy AGENTS"
     ;;
-  usun)
+  remove|usun)
     n="${2:-}"
     [[ "$n" =~ ^[0-9]+$ ]] || { echo "Podaj numer reguły (zobacz: agent-rule)." >&2; exit 1; }
-    [ "$n" -ge 1 ] && [ "$n" -le "$(reguly | wc -l)" ] || { echo "Nie ma reguły nr $n." >&2; exit 1; }
-    reguly | sed "${n}d" | zapisz
+    [ "$n" -ge 1 ] && [ "$n" -le "$(rules | wc -l)" ] || { echo "Nie ma reguły nr $n." >&2; exit 1; }
+    rules | sed "${n}d" | save
     echo "Usunięto regułę nr $n."
     ;;
   *)
-    sed -n '2,7p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '2,8p' "$0" | sed 's/^# \{0,1\}//'
     ;;
 esac
