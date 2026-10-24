@@ -778,6 +778,24 @@
  },
  {
   "type": "hint",
+  "desc": "brak pliku w ISTNIEJACYM ~/Pobrane = sprawdzenie, nie zgadywanie",
+  "tool": "bash",
+  "input": {
+   "command": "ls ~/Pobrane/brak-pliku-xyz.txt"
+  },
+  "expect": null
+ },
+ {
+  "type": "hint",
+  "desc": "cp brak pliku w istniejacym ~/Pobrane",
+  "tool": "bash",
+  "input": {
+   "command": "cp ~/Pobrane/brak-pliku-xyz.txt ~/tmp-opencode/"
+  },
+  "expect": null
+ },
+ {
+  "type": "hint",
   "desc": "sudo nadal lapane",
   "tool": "bash",
   "input": {

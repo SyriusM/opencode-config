@@ -502,6 +502,12 @@ const HINTS_SHELL: Hint[] = [
     text: 'Model zgaduje ścieżki (Projekt/Projekti/Pobrane/Pulpit) zamiast sprawdzić ls. Sprawdź najpierw: ls ~/Projekt* lub ls ~/Pobran* i użyj poprawnej ścieżki.' },
 ]
 
+// SUSPECT_HOME: segment pierwszego poziomu (np. ~/Projekt, /home/user/Pobran), który model
+// myli z istniejącym. Blokujemy tylko gdy sam segment nie istnieje (istniejący katalog
+// = sprawdzenie istnienia, nie zgadywanie — np. ~/Pobrane/brak.txt przy istniejącym ~/Pobrane).
+// (?:e|a)? + granica (?![A-Za-z]): Projekt/Pobran/Pobrane/Pobrania, ale nie ProjektX.
+const SUSPECT_HOME = /^(~|\/home\/[A-Za-z0-9_-]+)\/(Projekt|Projekti|Pojekty|Pulpit|Downloads|Desktop|Pobran)(?:e|a)?(?![A-Za-z])/i
+
 // TRYB NAPRAWCZY (sesja, w której model wczytał skill `autodiag` albo używa lesson-note / agent-rule / testu wtyczki):
 // osobista pamięć użytkownika (serwer MCP `mempalace` = ~/.mempalace) jest wtedy TYLKO DO ODCZYTU. Wnioski z napraw idą
 // do osobnego pałacu przez ~/bin/lesson-note. Poza trybem naprawczym model ma pełny dostęp jak dotąd.
@@ -567,6 +573,9 @@ function findHint(tool: string, input: any, repairMode = false): { name: string;
           // ścieżka = ostatnia grupa zaczynająca się od / albo ~ (m[2] bywa flagą, np. " -n" w cat -n)
           const sc = [m[3], m[2]].find(g => typeof g === "string" && /^["']?[\/~]/.test(g))
           if (!sc || pathExists(sc)) continue
+          // blokuj tylko gdy brakuje SUSPECT segmentu; istniejący katalog = sprawdzenie, nie zgadywanie
+          const sm = SUSPECT_HOME.exec(sc)
+          if (!sm || pathExists(sm[0])) continue
           const suggested = nearestPath(sc)
           return { name: w.name, text: suggested ? `Czy chodziło o ${suggested}?` : w.text }
         }
