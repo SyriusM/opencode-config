@@ -25,7 +25,7 @@ jobs:
         run: for f in plugins/*/index.ts; do npx -y esbuild "$f" --log-level=error --outfile=/dev/null || exit 1; done
 
       - name: Python script syntax
-        run: for f in bin/lesson-note bin/palace-context freecode/freecode freecode/rebrand tests/mock_llm.py; do python3 -c "import ast, sys; ast.parse(open(sys.argv[1]).read())" "$f" || exit 1; done
+        run: for f in bin/lesson-note bin/palace-context bin/freecode-tune freecode/freecode freecode/rebrand tests/mock_llm.py; do python3 -c "import ast, sys; ast.parse(open(sys.argv[1]).read())" "$f" || exit 1; done
 
       - name: plugin behaviour tests
         run: tests/plugins/run.sh

@@ -1,0 +1,80 @@
+#!/usr/bin/env python3
+"""crop-image: cut a fragment out of an image by percent coordinates (for vision models).
+
+Usage:
+  crop-image grid IN.jpg OUT.png                  copy of the image with a labelled 10% grid (to read coordinates off)
+  crop-image cut IN.jpg X0 Y0 X1 Y1 OUT.png       rectangle; X/Y in percent 0-100 of width/height (left, top, right, bottom)
+  crop-image ellipse IN.jpg X0 Y0 X1 Y1 OUT.png   ellipse inscribed in that box, transparent around it
+  crop-image poly IN.jpg OUT.png X Y X Y X Y ...  polygon (3+ points, percent of the whole image), transparent around it
+Prints the output path, pixel size and the share of the painting the fragment covers.
+Written 2026-10-23 for training task 26 (DJ remix); ellipse/poly 10-23: rectangles took too much background.
+"""
+import os, sys
+from PIL import Image, ImageDraw
+
+
+def grid(src, out):
+    im = Image.open(src).convert("RGB")
+    w, h = im.size
+    d = ImageDraw.Draw(im)
+    for i in range(1, 10):
+        x, y = w * i // 10, h * i // 10
+        d.line([(x, 0), (x, h)], fill=(255, 0, 255), width=1)
+        d.line([(0, y), (w, y)], fill=(255, 0, 255), width=1)
+        for (tx, ty) in ((x + 2, 2), (2, y + 2)):
+            d.rectangle([tx, ty, tx + 16, ty + 11], fill=(0, 0, 0))
+            d.text((tx + 1, ty), str(i * 10), fill=(255, 255, 0))
+    im.save(out)
+    print(f"{out} {w}x{h} (grid every 10%)")
+
+
+def shape_crop(im, kind, pts):
+    """kind = rect | ellipse (pts = [X0, Y0, X1, Y1]) or poly (pts = [X, Y, X, Y, ...]); percent coordinates.
+    Returns (RGBA crop of the bounding box, percent of the painting inside the shape). check.py of task 26 copies this."""
+    im = im.convert("RGB")
+    w, h = im.size
+    xy = [(round(w * pts[i] / 100), round(h * pts[i + 1] / 100)) for i in range(0, len(pts), 2)]
+    mask = Image.new("L", (w, h), 0)
+    d = ImageDraw.Draw(mask)
+    if kind == "rect":
+        d.rectangle([xy[0], (xy[1][0] - 1, xy[1][1] - 1)], fill=255)
+    elif kind == "ellipse":
+        d.ellipse([xy[0], (xy[1][0] - 1, xy[1][1] - 1)], fill=255)
+    else:
+        d.polygon(xy, fill=255)
+    box = mask.getbbox()
+    if not box:
+        return None, 0.0
+    out = Image.new("RGBA", (box[2] - box[0], box[3] - box[1]), (0, 0, 0, 0))
+    out.paste(im.crop(box), (0, 0), mask.crop(box))
+    return out, 100 * mask.histogram()[255] / (w * h)
+
+
+def cut(src, kind, pts, out):
+    try:
+        pts = [float(v) for v in pts]
+    except ValueError:
+        sys.exit("crop-image: coordinates must be numbers 0-100")
+    if not all(0 <= v <= 100 for v in pts):
+        sys.exit(f"crop-image: coordinates must be within 0-100, got {' '.join(f'{v:g}' for v in pts)}")
+    if kind != "poly" and not (pts[0] < pts[2] and pts[1] < pts[3]):
+        sys.exit(f"crop-image: need X0 < X1 and Y0 < Y1, got {' '.join(f'{v:g}' for v in pts)}")
+    c, share = shape_crop(Image.open(src), kind, pts)
+    if c is None:
+        sys.exit("crop-image: the shape is empty (points on one line?)")
+    os.makedirs(os.path.dirname(os.path.abspath(out)), exist_ok=True)
+    c.save(out)
+    print(f"{out} {c.size[0]}x{c.size[1]} from {os.path.basename(src)} {kind} {' '.join(f'{v:g}' for v in pts)} = {share:.1f}% of the painting")
+
+
+if __name__ == "__main__":
+    a = sys.argv[1:]
+    if len(a) == 3 and a[0] == "grid":
+        grid(a[1], a[2])
+    elif len(a) == 7 and a[0] in ("cut", "ellipse"):
+        cut(a[1], "rect" if a[0] == "cut" else "ellipse", a[2:6], a[6])
+    elif len(a) >= 9 and len(a) % 2 == 1 and a[0] == "poly":
+        cut(a[1], "poly", a[3:], a[2])
+    else:
+        print(__doc__.strip())
+        sys.exit(2)

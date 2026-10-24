@@ -23,6 +23,8 @@ new_home() {
 # plugins are imported from a copy, so a test can never write next to the source
 cp "$PLUGINS/tool-input-fix/index.ts" "$WORK/tool-input-fix.ts"
 cp "$PLUGINS/no-call-guard/index.ts" "$WORK/no-call-guard.ts"
+cp "$PLUGINS/power-cost/tariff.ts" "$WORK/power-cost-tariff.ts"
+cp "$PLUGINS/danger-guard/index.ts" "$WORK/danger-guard.ts"
 
 run() {
   local name=$1 out
@@ -42,4 +44,7 @@ for t in hint-text loop-escalation nochanges-stop nonblockable-deliver read-firs
 done
 run no-call-guard "${NODE[@]}" "$HERE/no-call-guard.test.mjs" "$WORK/no-call-guard.ts"
 run no-call-guard-act env NO_CALL_GUARD=act "${NODE[@]}" "$HERE/no-call-guard.test.mjs" "$WORK/no-call-guard.ts"
+run power-cost-tariff "${NODE[@]}" "$HERE/power-cost-tariff.test.mjs" "$WORK/power-cost-tariff.ts"
+run danger-guard "${NODE[@]}" "$HERE/danger-guard.test.mjs" "$WORK/danger-guard.ts"
+run freecode-tune python3 "$HERE/../freecode-tune.test.py"
 exit $fail

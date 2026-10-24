@@ -1,0 +1,233 @@
+#!/usr/bin/env python3
+"""site-lint: quick check of a static website directory (HTML + CSS + JS), no network.
+
+Usage: site-lint DIR [FILE.html ...]
+Checks every *.html in DIR (or only the given files):
+  ERROR  class used in HTML but not defined in any linked local CSS
+  ERROR  broken local link/src/href (file missing), #id anchor missing
+  ERROR  <img> without alt, form field without <label>
+  ERROR  target=_blank without rel="noopener noreferrer", http:// URL, javascript: URL
+  ERROR  unbalanced tags, invalid JSON-LD, id used in JS (getElementById/querySelector '#x') missing in HTML
+  WARN   inline <style>/style=/<script>/on* attributes, missing lang/viewport/<title>
+Exit 0 = no ERROR, 1 = errors found, 2 = usage.
+Written 2026-10-23 after training task 20: Gemma left 4-13 classes without CSS and never checked.
+"""
+import glob, json, os, re, sys
+from html.parser import HTMLParser
+
+VOID = {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "track", "wbr"}
+OPTIONAL_END = {"p", "li", "tr", "td", "th", "thead", "tbody", "tfoot", "option", "dt", "dd"}
+
+
+class Page(HTMLParser):
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.tags, self.stack, self.unbalanced = [], [], []
+        self.label_for, self.wrapped = set(), 0
+        self.cur_script, self.inline_script, self.style_tag = None, False, False
+        self.ld_json, self.title = [], ""
+        self.in_title = False
+
+    def handle_starttag(self, tag, attrs):
+        a = {k: (v or "") for k, v in attrs}
+        self.tags.append((tag, a, self.wrapped > 0, self.getpos()[0]))
+        if tag == "label":
+            self.wrapped += 1
+            if a.get("for"):
+                self.label_for.add(a["for"])
+        if tag == "script":
+            self.cur_script = a
+        if tag == "style":
+            self.style_tag = True
+        if tag == "title":
+            self.in_title = True
+        if tag not in VOID:
+            self.stack.append(tag)
+
+    def handle_startendtag(self, tag, attrs):
+        self.handle_starttag(tag, attrs)
+        if tag not in VOID and self.stack and self.stack[-1] == tag:
+            self.stack.pop()
+
+    def handle_endtag(self, tag):
+        if tag == "label":
+            self.wrapped -= 1
+        if tag == "script":
+            self.cur_script = None
+        if tag == "title":
+            self.in_title = False
+        while self.stack and self.stack[-1] != tag and self.stack[-1] in OPTIONAL_END:
+            self.stack.pop()
+        if self.stack and self.stack[-1] == tag:
+            self.stack.pop()
+        elif tag not in VOID:
+            self.unbalanced.append(tag)
+
+    def handle_data(self, data):
+        if self.in_title:
+            self.title += data
+        if self.cur_script is not None and data.strip():
+            if self.cur_script.get("type", "").lower() == "application/ld+json":
+                self.ld_json.append(data)
+            else:
+                self.inline_script = True
+
+
+def strip_comments(s, kind):
+    return re.sub(r"/\*.*?\*/", "", s, flags=re.S) if kind == "css" else re.sub(r"/\*.*?\*/|(?<![:\"'])//[^\n]*", "", s, flags=re.S)
+
+
+def read(p):
+    try:
+        with open(p, encoding="utf-8", errors="replace") as f:
+            return f.read()
+    except OSError:
+        return None
+
+
+def local(u):
+    u = u.strip()
+    return u and not re.match(r"(?i)^([a-z][a-z0-9+.-]*:|//|#)", u)
+
+
+def main():
+    if len(sys.argv) < 2 or not os.path.isdir(sys.argv[1]):
+        print(__doc__.strip())
+        return 2
+    root = os.path.abspath(sys.argv[1])
+    files = [os.path.join(root, f) for f in sys.argv[2:]] or sorted(glob.glob(os.path.join(root, "**", "*.html"), recursive=True))
+    errors, warns = [], []
+    pages = {}
+    for f in files:
+        txt = read(f)
+        if txt is None:
+            errors.append(f"{os.path.relpath(f, root)}: cannot read")
+            continue
+        d = Page()
+        d.feed(txt)
+        pages[f] = (txt, d)
+    all_ids = {}
+    for f, (_, d) in pages.items():
+        all_ids[f] = {a["id"] for _, a, _, _ in d.tags if a.get("id")}
+
+    js_cache = {}
+    for f, (txt, d) in pages.items():
+        rel = os.path.relpath(f, root)
+        base = os.path.dirname(f)
+        E = lambda line, msg: errors.append(f"{rel}:{line}: {msg}")
+        W = lambda line, msg: warns.append(f"{rel}:{line}: {msg}")
+        # linked local CSS
+        css = ""
+        for t, a, _, ln in d.tags:
+            if t == "link" and "stylesheet" in a.get("rel", "").lower() and local(a.get("href", "")):
+                c = read(os.path.join(base, re.sub(r"[?#].*", "", a["href"])))
+                if c is not None:
+                    css += strip_comments(c, "css")
+        if d.style_tag:
+            css += " ".join(re.findall(r"<style\b[^>]*>(.*?)</style>", txt, re.S | re.I))
+        # external stylesheet (CDN: Bootstrap, Tailwind...) = classes may live there, so only WARN
+        ext_css = any(t == "link" and "stylesheet" in a.get("rel", "").lower() and a.get("href", "").strip()
+                      and not local(a.get("href", "")) for t, a, _, _ in d.tags)
+        # classes used only as JS hooks (classList, querySelector('.x')) are not styling errors
+        js_all = ""
+        for t, a, _, _ in d.tags:
+            if t == "script" and local(a.get("src", "")):
+                js_all += read(os.path.normpath(os.path.join(base, re.sub(r"[?#].*", "", a["src"])))) or ""
+        js_all += " ".join(re.findall(r"<script\b[^>]*>(.*?)</script>", txt, re.S | re.I))
+        # only real class uses count: selector strings ('.x'), classList.*('x'), className = 'x', setAttribute('class', 'x');
+        # NOT identifiers (`const nav`) or tag selectors (querySelector('nav'))
+        js_all = strip_comments(js_all, "js")
+        lit = r"'(?:[^'\\\n]|\\.)*'|\"(?:[^\"\\\n]|\\.)*\"|`(?:[^`\\]|\\.)*`"
+        js_classes = set()
+        for s in re.findall(lit, js_all):
+            js_classes |= set(re.findall(r"\.(-?[A-Za-z_][\w-]*)", s))
+        for args in re.findall(r"classList\s*\.\s*(?:add|remove|toggle|contains|replace)\s*\(([^)]*)\)", js_all):
+            for s in re.findall(lit, args):
+                js_classes |= set(s[1:-1].split())
+        for s in re.findall(r"className\s*\+?=\s*(" + lit + ")", js_all) + re.findall(r"setAttribute\(\s*['\"]class['\"]\s*,\s*(" + lit + ")", js_all):
+            js_classes |= set(s[1:-1].split())
+        reported = set()
+        for t, a, wrapped, ln in d.tags:
+            for cls in a.get("class", "").split():
+                if cls not in reported and not re.search(r"\." + re.escape(cls) + r"(?![\w-])", css):
+                    reported.add(cls)
+                    if cls in js_classes:
+                        continue
+                    if ext_css:
+                        W(ln, f"class {cls!r} not in local CSS (maybe from external stylesheet)")
+                    else:
+                        E(ln, f"class {cls!r} not defined in CSS (add a rule in the stylesheet or remove the class)")
+            for k in ("href", "src", "action"):
+                v = a.get(k, "").strip()
+                if not v:
+                    continue
+                if v.lower().startswith("http://"):
+                    E(ln, f"http:// URL in <{t} {k}> (use https://)")
+                if v.lower().startswith("javascript:"):
+                    E(ln, f"javascript: URL in <{t} {k}>")
+                if v.startswith("#") and len(v) > 1 and v[1:] not in all_ids[f]:
+                    E(ln, f"anchor {v!r} has no element with that id")
+                elif local(v):
+                    path, _, frag = v.partition("#")
+                    target = os.path.normpath(os.path.join(base, re.sub(r"\?.*", "", path)))
+                    if path and not os.path.exists(target):
+                        E(ln, f"broken local reference <{t} {k}={v!r}> (file missing)")
+                    elif frag and target in all_ids and frag not in all_ids[target]:
+                        E(ln, f"anchor {v!r}: no id {frag!r} in {path}")
+            if t == "img" and not a.get("alt", "").strip() and "alt" not in a:
+                E(ln, f"<img src={a.get('src')!r}> without alt")
+            if t in ("input", "textarea", "select") and a.get("type") not in ("submit", "button", "hidden", "reset", "image"):
+                if not (wrapped or a.get("id", "") in d.label_for or a.get("aria-label")):
+                    E(ln, f"<{t} name={a.get('name')!r}> without <label>")
+            if a.get("target") == "_blank":
+                r = a.get("rel", "").lower().split()
+                if not ("noopener" in r and "noreferrer" in r):
+                    E(ln, 'target=_blank without rel="noopener noreferrer"')
+            if "style" in a:
+                W(ln, f"inline style= on <{t}>")
+            on = [k for k in a if k.startswith("on")]
+            if on:
+                W(ln, f"<{t}> has inline event attribute {on[0]}")
+        stack = [x for x in d.stack if x not in OPTIONAL_END | {"html", "body", "head"}]
+        if d.unbalanced or stack:
+            E("-", f"unbalanced HTML tags {(d.unbalanced + stack)[:4]}")
+        for raw in d.ld_json:
+            try:
+                json.loads(raw)
+            except ValueError as e:
+                E("-", f"JSON-LD is not valid JSON ({e})")
+        if d.style_tag:
+            W("-", "inline <style> block")
+        if d.inline_script:
+            W("-", "inline <script> (blocked by a strict CSP)")
+        htm = [a for t, a, _, _ in d.tags if t == "html"]
+        if not (htm and htm[0].get("lang")):
+            W("-", "no lang attribute on <html>")
+        if not any(t == "meta" and a.get("name") == "viewport" for t, a, _, _ in d.tags):
+            W("-", "no meta viewport")
+        if not d.title.strip():
+            W("-", "empty or missing <title>")
+        # ids used by local JS on this page
+        for t, a, _, ln in d.tags:
+            if t == "script" and local(a.get("src", "")):
+                p = os.path.normpath(os.path.join(base, re.sub(r"[?#].*", "", a["src"])))
+                if p not in js_cache:
+                    js_cache[p] = strip_comments(read(p) or "", "js")
+                js = js_cache[p]
+                want = set(re.findall(r"getElementById\(\s*['\"]([\w-]+)['\"]", js))
+                want |= set(re.findall(r"querySelector(?:All)?\(\s*['\"]#([\w-]+)['\"]", js))
+                for i in sorted(want - all_ids[f]):
+                    # a shared script may target ids from another page: only report if no page has it
+                    if not any(i in ids for ids in all_ids.values()):
+                        E(ln, f"{os.path.relpath(p, root)} uses id {i!r} that no page defines")
+
+    for x in errors:
+        print("ERROR " + x)
+    for x in warns:
+        print("WARN  " + x)
+    print(f"site-lint: {len(pages)} page(s), {len(errors)} error(s), {len(warns)} warning(s)")
+    return 1 if errors else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -181,6 +181,14 @@ const FIELD_TYPES = ["textbox", "checkbox", "radio", "combobox", "slider"]
 function fixMcp(tool: string, input: any): string[] {
   const fixes: string[] = []
   if (!input || typeof input !== "object") return fixes
+  if (tool === "execute" && typeof input.code === "string") {
+    const oldCode = input.code
+    input.code = input.code.replace(/time:\s*(\d+)/g, (m, p1) => {
+      const ms = parseInt(p1, 10)
+      return ms >= 100 ? `time: ${Math.round(ms / 1000)}` : m
+    })
+    if (input.code !== oldCode) fixes.push("time-ms→s")
+  }
   if (BROWSER.test(tool)) {
     // zablokuj browser_navigate z protokołami, których Playwright nie obsługuje → ERR_ABORTED
     if (/_navigate$/.test(tool) && typeof input.url === "string") {
@@ -333,7 +341,7 @@ function fixMcp(tool: string, input: any): string[] {
 // sudo, apt, zapis do /etc…). Zamiast pozwolić na niejasny błąd, nie wykonujemy wywołania i zwracamy JEDNO zdanie
 // z gotowym poprawnym przykładem (małe modele powtarzają to, co widzą — dlatego przykład, nie sam zakaz).
 // Każda wskazówka najwyżej 2× na sesję; potem wywołanie idzie normalnie. Wzorce z bazy błędów opencode (10-2026).
-type Hint = { name: string; re: RegExp; text: string }
+type Hint = { name: string; re: RegExp; text: string; always?: boolean }
 
 // usuwa napisy i komentarze, żeby np. `document.title` wewnątrz browser_evaluate nie było fałszywym trafieniem
 function stripLiterals(src: string): string {
@@ -344,18 +352,23 @@ function stripLiterals(src: string): string {
 }
 
 const HINTS_EXECUTE: Hint[] = [
+  // wbudowane narzędzia to osobne wywołania, nie `tools.*` w execute — Gemma 4 (10-22) wołała tools.shell/tools.read
+  // w kółko (search ich nie znajduje, więc model zgadywał dalej); blokada bez limitu, bo takie wywołanie i tak pada
+  { name: "native-tool-in-execute", always: true,
+    re: /(?<![\w.])tools\.(shell|bash|read|edit|write|grep|glob|list|skill|question|subagent|task|todowrite|webfetch)\s*(?:\.\s*\w+\s*)?\(/,
+    text: 'shell, read, edit, write, grep i skill NIE są dostępne w execute (tools.shell / tools.read nie istnieją i search ich nie znajdzie). To osobne narzędzia: zamiast execute wywołaj wprost narzędzie shell z argumentem command: "ls /home/user/katalog", a plik przeczytaj narzędziem read z filePath. W execute zostają tylko tools.playwright.*, tools.fetch.*, tools.mempalace.* i inne z search.' },
   { name: "python-in-execute", re: /^\s*(def \w+\(|import (\w+(\s+as\s+\w+)?)(\s*,\s*(\w+(\s+as\s+(\w))?))*\s*$|from [\w.]+ import |print\s*\()/m,
     text: 'execute rozumie tylko JavaScript. Wypisywanie: console.log("tekst"). Python uruchom narzędziem shell: python3 -c "print(1)".' },
   { name: "python-import", re: /^\s*import\s+(?:\w+[\s\S]*?\s+from\s+|[{*])/m,
-    text: 'To JavaScript (ES modules), nie Python. W execute: const fs = await import("fs"); albo await tools.filesystem.read_file({path: "/home/user/plik"}).' },
+    text: 'To JavaScript (ES modules), nie Python. W execute: const fs = await import("fs"); albo plik przeczytaj osobnym narzędziem read (filePath), nie z execute.' },
   { name: "require-import", re: /\brequire\s*\(|\bawait\s+import\s*\(/,
-    text: 'W execute nie ma Node (brak require/import). Plik: const r = await tools.filesystem.read_file({path: "/home/user/plik.txt"}); console.log(r.content). Polecenia systemowe: narzędzie shell.' },
+    text: 'W execute nie ma Node (brak require/import). Plik: osobne narzędzie read (filePath). Polecenia systemowe: osobne narzędzie shell.' },
   { name: "timer", re: /\b(setTimeout|setInterval|setImmediate)\s*\(/,
     text: 'W execute nie ma timerów. Czekanie: await tools.playwright.browser_wait_for({time: 2}) (sekundy), a poza przeglądarką narzędzie shell: sleep 2.' },
   { name: "page-playwright", re: /(^|[^.\w])(page|browser|context)\.(title|goto|click|fill|type|evaluate|locator|url|content|waitFor\w*|newPage|close|screenshot)\s*\(/,
     text: 'Nie ma obiektu page/browser. Użyj: await tools.playwright.browser_navigate({url: "https://example.com"}); const s = await tools.playwright.browser_snapshot(); console.log(s) — tytuł i adres są w zrzucie („Page Title”, „Page URL”).' },
   { name: "fs-process", re: /(^|[^.\w])(fs|process|child_process|os)\.\w+\s*\(/,
-    text: 'W execute nie ma fs/process. Pliki: await tools.filesystem.read_file({path: "/home/user/plik"}) albo narzędzie read; polecenia: narzędzie shell.' },
+    text: 'W execute nie ma fs/process. Pliki: osobne narzędzie read (filePath); polecenia: narzędzie shell.' },
   { name: "websearch-in-execute", re: /\btools\.websearch\./,
     text: 'websearch jest wyłączony. Szukaj w przeglądarce: await tools.playwright.browser_navigate({url: "https://duckduckgo.com/?q=SLOWA+PLUSAMI"}); const r = await tools.playwright.browser_evaluate({function: "() => [...document.querySelectorAll(\'a[data-testid=result-title-a]\')].map(a => a.href + \' | \' + a.innerText).slice(0, 10).join(\'\\\\n\')"}); console.log(r)' },
 ]
@@ -453,6 +466,17 @@ const nearestPath = (path: string): string | null => {
   }
 }
 
+// komenda zmieniająca pliki + „nie ma takiego pliku” = model ma zgłosić brak, a nie szukać zamiennika
+const MUTATING_CMD = /(^|[;&|(]\s*)(sudo\s+)?((rm|rmdir|unlink|shred|truncate|mv|cp|ln|chmod|chown|touch)\s|sed\s+(-\w*\s+)*-i)/m
+const MISSING_FILE = /No such file or directory|Nie ma takiego pliku/i
+export function isMissingTarget(cmd: string, msg: string): boolean {
+  return MUTATING_CMD.test(cmd) && MISSING_FILE.test(msg)
+}
+const MISSING_TARGET_NOTE =
+  "WSKAZÓWKA: pliku albo katalogu z tej komendy NIE MA. Przy usuwaniu, przenoszeniu i zmianie plików NIE szukaj zamiennika " +
+  "(ten sam plik w innym katalogu, podobna nazwa) i nie wykonuj tej operacji na innym pliku niż wskazany przez użytkownika. " +
+  "Napisz użytkownikowi wprost, że ścieżka nie istnieje (podaj ją), i ewentualnie wymień podobne pliki, które widzisz — bez ruszania ich."
+
 const HINTS_SHELL: Hint[] = [
   { name: "js-in-shell", re: /^\s*(await\s+)?tools\.\w+\.\w+/,
     text: 'To JavaScript, a shell to powłoka. Wywołania tools.* wykonuj narzędziem execute, np. code: const r = await tools.playwright.browser_navigate({url: "https://example.com"}); console.log(r)' },
@@ -531,7 +555,7 @@ function findHint(tool: string, input: any, repairMode = false): { name: string;
     }
     if (tool === "execute" && typeof input.code === "string") {
       const goly = stripLiterals(input.code)
-      for (const w of HINTS_EXECUTE) if (w.re.test(goly)) return { name: w.name, text: w.text }
+      for (const w of HINTS_EXECUTE) if (w.re.test(goly)) return { name: w.name, text: w.text, always: w.always }
     } else if (/^(shell|bash|fish)$/.test(tool) && typeof input.command === "string") {
       const goly = stripLiterals(input.command)
       // nazwa zabijanego procesu bywa w cudzysłowie (pkill -f 'opencode serve'), więc tę regułę sprawdzamy na pełnym poleceniu
@@ -755,13 +779,13 @@ export default {
             input = { ...input, code: n.code }
             fixes = [...r.fixes, ...n.fixes]
           }
-        } else {
-          const copy = { ...input }
-          const f = fixMcp(tool, copy)
-          if (f.length) {
-            input = copy
-            fixes.push(...f)
-          }
+        }
+        // Always run fixMcp to catch nested issues (e.g., playwright in execute)
+        const copy = { ...input }
+        const f = fixMcp(tool, copy)
+        if (f.length) {
+          input = copy
+          fixes.push(...f)
         }
         if (fixes.length) {
           ev.input = input
@@ -928,8 +952,40 @@ export default {
             log(`LOOP-STOP-NOCHANGES edit n=${n} stop=${e.n} session=${sid}`)
           } else log(`NOCHANGES edit n=${n} session=${sid}`)
         }
+        // Odmowa z reguł uprawnień (Permission.BlockedError → "Permission denied: <akcja>", komenda NIE ruszyła).
+        // Model ponawia tę samą odmowę albo próbuje ją obejść (bash -c, skrypt, pkexec). Tylko ten dokładny
+        // komunikat — "Permission denied" z wyjścia samej komendy (chmod, plik roota) to inny przypadek.
+        const denied = /^Permission denied: ([\w-]+)/.exec(msg)
+        if (denied) {
+          const sid = String(ev.sessionID)
+          const pdKey = sid + "\u0000" + "permission-denied"
+          const pdCount = (shown.get(pdKey) ?? 0) + 1
+          if (shown.size > 2000) shown.clear()
+          shown.set(pdKey, pdCount)
+          appendToError(
+            ev,
+            pdCount === 1
+              ? `\n\nWSKAZÓWKA: to odmowa z reguł uprawnień ustawionych przez użytkownika (${denied[1]}), nie błąd systemu — nic nie zostało uruchomione. ` +
+                  `Ta sama albo przerobiona komenda (inne cudzysłowy, bash -c, skrypt, pkexec) też jest zabroniona — nie ponawiaj i nie obchodź reguły. ` +
+                  `Jeśli bez tego nie skończysz zadania: napisz użytkownikowi, co chcesz zrobić i dlaczego, i podaj gotową komendę do wklejenia ` +
+                  `(np. \`sudo cp PLIK CEL\` albo \`sudo bash ~/tmp-opencode/SKRYPT.sh\` — skrypt najpierw zapisz narzędziem write). Potem zakończ turę.`
+              : `\n\nSTOP: odmowa uprawnień już ${pdCount}× w tej sesji. Nie próbuj dalej — napisz użytkownikowi, czego potrzebujesz, i zakończ turę.`,
+          )
+          log(`HINT-permission-denied ${tool} action=${denied[1]} n=${pdCount} session=${sid}`)
+        }
+        // Brak pliku przy komendzie, która coś usuwa/przenosi/zmienia: NIE przypominamy wniosków „sprawdź ls i użyj ścieżki
+        // z wyniku” — 10-23 Gemma (zadanie 11) po takim wniosku usunęła INNY plik o tej samej nazwie (new/ zamiast old/).
+        const missingTarget = isMissingTarget(cmd, msg)
+        if (missingTarget) {
+          const k = String(ev.sessionID) + "\u0000" + "missing-target"
+          if (!reminded.has(k)) {
+            reminded.add(k)
+            appendToError(ev, "\n\n" + MISSING_TARGET_NOTE)
+            log(`HINT-missing-target ${tool} session=${ev.sessionID}`)
+          }
+        }
         // znane rozwiązanie z kopalni — doklejone do błędu, raz na sesję dla danego wniosku
-        const wn = findLesson(msg)
+        const wn = missingTarget ? null : findLesson(msg)
         if (wn) {
           const k = String(ev.sessionID) + "\u0000" + wn.file
           if (!reminded.has(k)) {

@@ -72,10 +72,10 @@ fi
 autotest() {
   local errors=0 py
   echo "Autotest"
-  for n in tool-input-fix lesson-draft palace-context error-hook auto-backup; do
+  for n in tool-input-fix lesson-draft palace-context error-hook auto-backup no-call-guard danger-guard site-lint-hook; do
     if [ -f "$PLUGINS/$n/index.ts" ]; then ok "wtyczka $n"; else fail "brak wtyczki $n"; errors=$((errors+1)); fi
   done
-  for f in palace-context audit-retention lesson-note agent-rule backup-copy; do
+  for f in palace-context audit-retention lesson-note agent-rule backup-copy freecode-tune site-lint; do
     if [ -x "$BIN/$f" ]; then ok "skrypt ~/bin/$f"; else fail "brak ~/bin/$f"; errors=$((errors+1)); fi
   done
   py="$(head -1 "$BIN/palace-context" | sed 's/^#!//')"
@@ -88,7 +88,7 @@ autotest() {
   if out="$(timeout 120 "$BIN/lesson-note" 2>&1)"; then ok "lesson-note: $(echo "$out" | tail -1)"
   else fail "lesson-note padł: $(echo "$out" | tail -2)"; errors=$((errors+1)); fi
   if command -v node >/dev/null && command -v npx >/dev/null; then
-    for n in tool-input-fix lesson-draft palace-context error-hook auto-backup; do
+    for n in tool-input-fix lesson-draft palace-context error-hook auto-backup no-call-guard danger-guard site-lint-hook; do
       if npx -y esbuild "$PLUGINS/$n/index.ts" --log-level=error --outfile=/dev/null >/dev/null 2>&1; then ok "składnia $n"
       else fail "błąd składni $n"; errors=$((errors+1)); fi
     done
@@ -205,7 +205,14 @@ install_file() { # install_file źródło cel tryb
   echo "$dst" >> "$MANIFEST.new"
 }
 for d in "$REPO"/plugins/*/; do
-  n="$(basename "$d")"; install_file "$d/index.ts" "$PLUGINS/$n/index.ts" 644; ok "wtyczka $n"
+  n="$(basename "$d")"
+  for f in index.ts tui.tsx tariff.ts package.json; do  # tui.tsx + package.json: wtyczki z częścią w TUI
+    [ -f "$d/$f" ] && install_file "$d/$f" "$PLUGINS/$n/$f" 644
+  done
+  ok "wtyczka $n"
+done
+for d in "$REPO"/skills/*/; do  # opencode wczytuje skille z ~/.config/opencode/skills/<nazwa>/SKILL.md
+  n="$(basename "$d")"; install_file "$d/SKILL.md" "$CFG/opencode/skills/$n/SKILL.md" 644; ok "skill $n"
 done
 for f in "$REPO"/bin/*; do
   [ -f "$f" ] || continue  # np. __pycache__ po sprawdzaniu składni

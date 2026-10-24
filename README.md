@@ -13,6 +13,7 @@ To czysty kod, bez konfiguracji modeli, promptów i danych.
 | `plugins/palace-context` + `bin/palace-context` | Dokleja do promptu systemowego do 3 notatek z MemPalace dla katalogu sesji, tylko ze skrzydeł wybranych przy instalacji (domyślnie wszystkich; próg podobieństwa 0,57). Gdy embeddingi nie działają, dokleja ostrzeżenie zamiast pustki. |
 | `plugins/auto-thinking` | Dynamiczny limit myślenia dla wariantu „auto”: nowe polecenie → medium, udane narzędzie → low, błędy albo `LOOP-STOP` → high (podmienia `auto_thinking` na `thinking_budget_tokens` w zapytaniu). Gdy nie zadziała, serwer stosuje własny limit. |
 | `plugins/no-call-guard` | Wykrywa turę, w której model pokazał komendę z „wynikiem”, ale nie wywołał narzędzia (zmyślony wynik). Domyślnie tylko loguje; z `NO_CALL_GUARD=act` dopisuje notkę, która każe uruchomić komendę albo przyznać, że jej nie uruchamiał. |
+| `plugins/power-cost` | Wtyczka TUI: koszt prądu GPU od startu. Stawka: ręczna z `POWER_COST_PER_KWH` (+ `POWER_COST_CURRENCY`; stara `POWER_COST_PLN_PER_KWH` też działa), inaczej średnia dla gospodarstw domowych z Eurostatu (`nrg_pc_204`, 2500–4999 kWh/rok, z podatkami, ostatnie półrocze) dla kraju z `POWER_COST_COUNTRY` albo `LANG`, w walucie kraju, cache `~/.cache/power-cost.json` na 30 dni; bez sieci i cache 1,26 zł/kWh i stan karty z `nvidia-smi`. W pasku bocznym sekcja „Prąd i GPU” (model, waty i szczyt, obciążenie, temperatura, wentylator, VRAM, Wh, koszt/h, stawka i źródło), na dole skrót `⚡ koszt · W · °C`, widoczny też przy schowanym pasku. Tylko NVIDIA. |
 | `plugins/error-hook` | Zapisuje błędy narzędzi do JSONL (`~/mempalace/audit/`). |
 | `plugins/auto-backup` | Przed każdą zmianą plików konfiguracji robi kopię zapasową (cofanie: `bin/backup-copy`). |
 | `bin/lesson-note` | Kopalnia wniosków: `OBJAW / PRZYCZYNA / NAPRAWA / PRZYKŁAD` w plikach i w **osobnym** palace (`~/.mempalace-opencode`). Wnioski modeli nie mieszają się z pamięcią osobistą. Format: `lessons/EXAMPLE.md`. |
@@ -20,6 +21,46 @@ To czysty kod, bez konfiguracji modeli, promptów i danych.
 | `freecode/freecode` | opencode tylko na lokalnych modelach: konfigurator przy pierwszym starcie, kontrola konfiguracji przed każdym startem (opis niżej). |
 | `freecode/rebrand` | Kopia źródeł opencode z nazwą freecode (`rebrand SOURCE TARGET`; log `TARGET.log.tsv`, podsumowanie `TARGET.summary.md`). Czego nie można zmienić (licencja, domeny, repozytoria, zewnętrzne paczki npm, pliki binarne, logo), zapisuje do logu z plikiem i linią. Dodatkowo spisuje wszystkie adresy sieciowe w kodzie. |
 | `bin/audit-retention` + `systemd/` | Co tydzień przenosi audyt starszy niż 30 dni do archiwum tar. Pliki kasuje dopiero po weryfikacji bajt w bajt. |
+
+## Start od zera (`bootstrap.sh`)
+
+Na czystym systemie jedna komenda stawia wszystko: llama.cpp, model z Hugging Face, opencode, wtyczki i freecode.
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/SyriusM/opencode-config/main/bootstrap.sh | bash
+./bootstrap.sh --dry-run   # z klonu repo: tylko pokaże wykryty sprzęt i plan
+```
+
+Skrypt rozpoznaje GPU, VRAM, RAM i sterownik, a potem dobiera:
+
+| Sprzęt | llama.cpp | Model |
+|---|---|---|
+| NVIDIA, sterownik ≥ 580 / ≥ 570 | CUDA 13 / CUDA 12 (gotowe wydanie razem z bibliotekami CUDA) | |
+| AMD, Intel (z Vulkanem) | Vulkan | |
+| bez GPU | CPU | |
+| RAM ≥ 28 GiB albo VRAM ≥ 22 GiB | | Qwen3.6-35B-A3B IQ4_NL (~18 GB; MoE: eksperci w RAM, reszta + cache ekspertów na GPU) |
+| RAM ≥ 14 GiB albo VRAM ≥ 8 GiB | | Qwen3.5-9B Q4_K_XL (~6 GB) |
+| mniej | | Qwen3-4B Instruct (~3 GB, słaby do narzędzi) |
+
+**Minimalne wymagania** (lokalny model; poniżej tego bootstrap odmawia i proponuje `--url` z serwerem na innym komputerze):
+
+| | Minimum | Lepiej |
+|---|---|---|
+| System | Linux x86_64 (gotowe wydania llama.cpp), Python ≥ 3.10, Node ≥ 20, git, curl | systemd --user (start na żądanie) |
+| Pamięć | 8 GB RAM albo 6 GB VRAM — model 4B, słaby do pracy z narzędziami | 16 GB RAM → 9B; 32 GB RAM (albo 24 GB VRAM) → 35B |
+| Procesor | x86_64; bez AVX2 działa, ale kilkukrotnie wolniej | AVX2, ≥ 6 rdzeni |
+| Karta | niepotrzebna (samo CPU) | NVIDIA ze sterownikiem ≥ 570 (CUDA); AMD/Intel przez Vulkan — kalibracja sprawdza, czy w ogóle szybsza od CPU |
+| Dysk | ~6 GB (4B), ~9 GB (9B), ~21 GB (35B) | NVMe (szybsze wczytywanie modelu) |
+
+Minimum jest wyliczone z rozmiaru modelu i okna, **nie zmierzone na słabym sprzęcie**. Słabsze komputery (mniej RAM, ARM) to osobny temat: mniejsze modele albo serwer w LAN.
+
+**Sprawdzony jest tylko zestaw RTX 3080 10 GB + 32 GB RAM** (35B, ~118 tok/s w czacie). Przy innym sprzęcie skrypt mówi to wprost, a rozkład warstw między GPU i RAM zostawia `--fit` llama.cpp. Build llama.cpp jest przypięty (`LLAMA_TAG` w skrypcie), bo nocne wydania zmieniają ustawienia domyślne.
+
+Model startuje **na żądanie**: gniazdo `freecode-llama-proxy.socket` nasłuchuje na porcie, pierwsze zapytanie budzi `freecode-llama.service`, a po 15 min bezczynności serwer sam się wyłącza i zwalnia VRAM oraz RAM (ten sam układ co gniazda-proxy w naszym stacku). Pierwsze zapytanie po przerwie czeka, aż model się wczyta. `--idle N` zmienia czas, `--idle 0` = serwer działa stale. Wyłączenie na stałe: `systemctl --user disable --now freecode-llama-proxy.socket freecode-llama.service`; włączenie z powrotem: `systemctl --user enable --now freecode-llama-proxy.socket`. Pliki trafiają do `~/.local/share/freecode/` (`llama.cpp/`, `models/`). Na koniec skrypt robi próbę z narzędziem: model ma odczytać plik z losowym tekstem. Opcje: `--profile 35b|9b|4b`, `--backend cuda-13|cuda-12|vulkan|cpu`, `--llama-tag`, `--port`, `--url … --model …` (własny serwer), `--idle N`, `--no-smoke`.
+
+**Kalibracja (Vulkan).** Vulkan widzi naraz każdą kartę, także grafikę w procesorze, a słaba zintegrowana bywa wolniejsza od samego CPU (Radeon 610M: 35B 8,7 tok/s, CPU 15,5). Dlatego po pobraniu modelu bootstrap mierzy `llama-bench` każdą kartę i samo CPU i bierze najszybsze. Do tego mierzy czas czekania na pamięć (PSI), bo przy braku RAM wynik mierzy swap, a nie kartę. Raport trafia do `~/.local/share/freecode/tune-report.json`.
+
+**Strojenie: `freecode-tune` + skill `freecode-tune`.** Po instalacji można poprosić model w freecode: „dostrój model”. Model wybiera zmianę flagi z białej listy (`ctx`, `moe-cache`, `n-cpu-moe`, `spec`, `threads`, `ubatch`, `batch`, `cache-ram`, każda w zakresie), a `~/bin/freecode-tune try KLUCZ=WARTOŚĆ` restartuje serwer i mierzy czat, przepisywanie kodu i długi prompt (~60% okna). Zmiana zostaje tylko wtedy, gdy wynik rośnie o ≥ 3% (albo większy kontekst traci ≤ 3%), a inaczej wraca. Model proponuje, skrypt rozstrzyga. Zmiany siedzą w drop-inie `freecode-llama.service.d/tune.conf`, a `freecode-tune rollback` przywraca ustawienia z bootstrapu. Ręcznie: `freecode-tune status`, `freecode-tune bench`. Własne usługi z llama-server też: `freecode-tune units`, potem `-u NAZWA` (zmiany idą do `NAZWA.service.d/tune.conf`). Gdy usługa ma `--mmproj`, pomiar wysyła też obrazek — zmiana, po której serwer pada na obrazku, wraca. Uwaga: `tune.conf` ma całą linię startu, więc ręczna zmiana flag w unicie po strojeniu nie zadziała — `freecode-tune status` to pokaże, a `freecode-tune rebase` przeniesie strojenie na nowe flagi.
 
 ## Instalacja
 
@@ -152,6 +193,20 @@ Każdy test działa na sztucznym katalogu domowym w `/tmp`. Sprawdzają m.in. 92
   - `sessionID` jest w `event.data.sessionID`.
   - Błąd narzędzia to `session.tool.failed` (`data.error.message`, `data.id`).
   - Nazwa narzędzia jest w `session.tool.input.started` (`data.name`), a nie w `session.tool.called`.
+
+## Podziękowania
+
+To repozytorium to tylko cienka warstwa na pracy wielu ludzi, którzy oddali ją za darmo. Bez nich nic z tego by nie działało.
+
+- **Linus Torvalds** i społeczność [Linuksa](https://kernel.org), **GNU**, **systemd**, [Arch Linux](https://archlinux.org) i [CachyOS](https://cachyos.org) — system, na którym to wszystko stoi.
+- **Georgi Gerganov** i współtwórcy [llama.cpp](https://github.com/ggml-org/llama.cpp) — serwer, który uruchamia modele na zwykłej karcie.
+- **Iwan Kawrakow** — autor kwantyzacji k-quants i i-quants w llama.cpp (plik `IQ4_NL`, na którym chodzi tu model 35B, to jego praca) oraz [ik_llama.cpp](https://github.com/ikawrakow/ik_llama.cpp).
+- Zespół **Qwen** (Alibaba), **Google** (Gemma), **BAAI** (bge-m3) — otwarte modele.
+- [unsloth](https://unsloth.ai) — kwantyzacje modeli z zachowaną warstwą MTP.
+- Twórcy [opencode](https://opencode.ai) — harness, który te wtyczki rozszerzają.
+- [MemPalace](https://github.com/MemPalace/mempalace) — pamięć dla modelu.
+- [Anthropic](https://anthropic.com) — Claude pomagał projektować, pisać i mierzyć większość tego kodu.
+- [SyriusM](https://github.com/SyriusM) — sobie, za to, że ta lista mogła powstać.
 
 ## Licencja
 

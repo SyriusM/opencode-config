@@ -1,0 +1,721 @@
+#!/usr/bin/env python3
+"""freecode-tune — strojenie serwera llama.cpp (usługa systemd --user): próba → pomiar → zostaw albo cofnij.
+
+  freecode-tune units                     usługi z llama-server, które można stroić
+  freecode-tune [-u UNIT] status          stan: flagi teraz, dozwolone zmiany, wynik bazowy, ostatnie próby
+  freecode-tune [-u UNIT] bench           zmierz obecne ustawienia i zapisz jako bazę (GOOD)
+  freecode-tune [-u UNIT] try KLUCZ=WARTOŚĆ…   zmień flagi, zrestartuj, zmierz; lepiej = zostaje, gorzej = cofnięte
+  freecode-tune [-u UNIT] rollback        usuń zmiany strojenia (wraca ExecStart z unitu i jego drop-inów)
+  freecode-tune [-u UNIT] rebase          przenieś strojenie na bazę zmienioną ręcznie po strojeniu
+
+UNIT domyślnie freecode-llama.service (z bootstrap.sh); można też np. `-u llama-qwen36`. Usługa startowana
+na żądanie przez gniazdo NAZWA-proxy.socket jest budzona przez to gniazdo, inna restartowana wprost.
+
+Zmieniać można tylko flagi z białej listy (KNOBS niżej), w ich zakresach — także gdy polecenie wydaje
+model AI. Zmiany trafiają do osobnego drop-inu `UNIT.d/tune.conf` (czytany jako ostatni); unit i jego
+pozostałe drop-iny zostają nietknięte, a argumenty spoza listy (z %h, cudzysłowami) przechodzą dosłownie.
+Strażnik, który przy awarii odsuwa tune.conf, przywraca więc ustawienia sprzed strojenia.
+tune.conf ma pełną linię ExecStart, więc przykrywa późniejsze ręczne zmiany w unicie/drop-inach — dlatego
+zapamiętuje bazę (`# base:`); status ostrzega, bench/try odmawiają, a `rebase` nakłada strojone flagi na nową bazę.
+Historia prób: ~/.local/share/freecode/tune-history.jsonl.
+
+Pomiar (na działającym serwerze, z tym samym rozkładem pamięci co w pracy): czat, przepisywanie kodu
+(tu działa spekulacja ngram) i długi prompt (prędkość czytania + czy nie brakuje pamięci). Krótkie testy
+dwa razy (liczy się lepszy), długi prompt raz. Wynik = średnia geometryczna trzech prędkości; zmiana zostaje, gdy wynik
+rośnie o ≥ 3% (szum pomiaru) — albo gdy większy kontekst nie traci więcej niż 3%.
+
+Zmienne: FREECODE_TUNE_UNIT (jak -u), FREECODE_TUNE_SOCKET (gniazdo zamiast NAZWA-proxy.socket, puste = brak).
+"""
+import json
+import math
+import os
+import re
+import subprocess
+import sys
+import time
+import urllib.error
+import urllib.request
+import base64
+import fcntl
+import struct
+import zlib
+
+CFG = os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config")
+DATA = os.path.join(os.environ.get("XDG_DATA_HOME") or os.path.expanduser("~/.local/share"), "freecode")
+UNITS = os.path.join(CFG, "systemd", "user")
+UNIT = SOCKET = PROXY = DROPIN = STATE = ""
+
+
+def select_unit(name):
+    global UNIT, SOCKET, PROXY, DROPIN, STATE
+    UNIT = name if name.endswith(".service") else name + ".service"
+    stem = UNIT[:-len(".service")]
+    SOCKET = os.environ.get("FREECODE_TUNE_SOCKET", stem + "-proxy.socket")
+    PROXY = SOCKET.replace(".socket", ".service")
+    DROPIN = os.path.join(UNITS, UNIT + ".d", "tune.conf")
+    STATE = os.path.join(DATA, f"tune-state-{stem}.json")
+
+
+select_unit(os.environ.get("FREECODE_TUNE_UNIT", "freecode-llama.service"))
+HISTORY = os.path.join(DATA, "tune-history.jsonl")
+REPORT = os.path.join(DATA, "tune-report.json")
+
+KEEP_GAIN = 1.03      # poniżej 3% to szum pomiaru (dwie próby tej samej konfiguracji różnią się o 1–2%)
+CTX_TOLERANCE = 0.97  # większy kontekst może kosztować do 3% prędkości
+STALL_LIMIT = 10      # % czasu czekania na pamięć (PSI full) — powyżej pomiar mierzy brak RAM, nie ustawienia
+LOAD_TIMEOUT = 900
+
+# Biała lista: klucz → (flagi llama-server, które ustawia/zastępuje, typ, zakres albo wartości, opis).
+# Zakres chroni przed ustawieniami, które wyłożą serwer albo sesję, w której działa model AI.
+KNOBS = {
+    "ctx":        (["-c", "--ctx-size"], int, (16384, 262144), "okno kontekstu w tokenach (wielokrotność 1024)"),
+    "moe-cache":  (["--moe-cache-mib"], int, (0, 32000), "MiB VRAM na cache ekspertów MoE (tylko przy --cpu-moe)"),
+    "n-cpu-moe":  (["-ncmoe", "--n-cpu-moe"], int, (0, 99), "eksperci pierwszych N warstw w RAM zamiast --cpu-moe (off = --cpu-moe)"),
+    "spec":       (["--spec-type"], str, ("ngram-mod", "ngram-simple", "none"), "spekulacja bez modelu-szkicu"),
+    "threads":    (["-t", "--threads"], int, (1, os.cpu_count() or 1), "wątki CPU przy generowaniu"),
+    "ubatch":     (["-ub", "--ubatch-size"], int, (128, 4096), "fizyczna paczka promptu (prędkość czytania, VRAM)"),
+    "batch":      (["-b", "--batch-size"], int, (128, 8192), "logiczna paczka promptu (≥ ubatch)"),
+    "cache-ram":  (["--cache-ram"], int, (0, 16384), "MiB RAM na cache promptów (za dużo wypycha wagi z RAM)"),
+}
+FLAG_ARITY = {"--cpu-moe": 0, "--no-host": 0, "--jinja": 0, "--no-mmap": 0, "--mlock": 0}
+
+
+def die(msg, code=1):
+    print(f"✗ {msg}", file=sys.stderr)
+    sys.exit(code)
+
+
+# ── unit i drop-in ──────────────────────────────────────────────────────────────────────────────
+def systemd_split(line):
+    """ExecStart= → argumenty w postaci DOSŁOWNEJ (cudzysłowy, %h, $$, \\ zostają), żeby zapis z powrotem
+    dał systemd dokładnie to samo. Porównujemy tylko nazwy flag i wartości z białej listy (zwykłe liczby)."""
+    tokens, cur, quote, i = [], "", None, 0
+    while i < len(line):
+        c = line[i]
+        if c == "\\" and i + 1 < len(line):
+            cur += line[i:i + 2]; i += 2; continue
+        if quote:
+            quote = None if c == quote else quote
+            cur += c
+        elif c in "\"'":
+            quote = c; cur += c
+        elif c.isspace():
+            if cur:
+                tokens.append(cur); cur = ""
+        else:
+            cur += c
+        i += 1
+    if cur:
+        tokens.append(cur)
+    return tokens
+
+
+def systemd_join(args):
+    return " ".join(args)
+
+
+def exec_start(paths):
+    """Działające ExecStart= po kolei z unitu i drop-inów (pusta linia ExecStart= zeruje, jak w systemd)."""
+    found = None
+    for path in paths:
+        if not os.path.exists(path):
+            continue
+        text = re.sub(r"\\\n", " ", open(path, encoding="utf-8").read())   # kontynuacje linii
+        for line in text.splitlines():
+            if line.startswith("ExecStart="):
+                value = line[len("ExecStart="):].strip()
+                found = systemd_split(value) if value else None
+    return found
+
+
+def unit_files(with_tune):
+    d = os.path.join(UNITS, UNIT + ".d")
+    drops = sorted(f for f in os.listdir(d) if f.endswith(".conf")) if os.path.isdir(d) else []
+    return [os.path.join(UNITS, UNIT)] + [os.path.join(d, f) for f in drops if with_tune or f != "tune.conf"]
+
+
+def base_args():
+    late = [f for f in unit_files(False)[1:] if os.path.basename(f) > "tune.conf" and exec_start([f])]
+    if late:   # drop-in czytany po tune.conf nadpisałby zmiany strojenia — próby mierzyłyby coś innego
+        die(f"{late[0]} ustawia ExecStart= i jest czytany po tune.conf — zmień mu nazwę (np. na 50-…conf)")
+    args = exec_start(unit_files(False))
+    if not args:
+        die(f"brak {UNITS}/{UNIT} z ExecStart= (lista usług do strojenia: freecode-tune units)")
+    if not re.search(r"llama-server$", args[0].strip("\"'")):
+        die(f"{UNIT} nie uruchamia llama-server — strojenie obsługuje tylko llama.cpp")
+    return args
+
+
+def current_args():
+    return exec_start(unit_files(True)) or base_args()
+
+
+def to_options(args):
+    """[program, -m, x, --cpu-moe, ...] → (program, [(flaga, wartość|None), ...])."""
+    prog, rest, opts, i = args[0], args[1:], [], 0
+    while i < len(rest):
+        flag = rest[i]
+        takes = FLAG_ARITY.get(flag, 1)
+        if takes and i + 1 < len(rest) and not (rest[i + 1].startswith("-") and not re.fullmatch(r"-\d+", rest[i + 1])):
+            opts.append((flag, rest[i + 1])); i += 2
+        else:
+            opts.append((flag, None)); i += 1
+    return prog, opts
+
+
+def from_options(prog, opts):
+    out = [prog]
+    for flag, value in opts:
+        out.append(flag)
+        if value is not None:
+            out.append(value)
+    return out
+
+
+def get(opts, flags):
+    for flag, value in opts:
+        if flag in flags:
+            return value if value is not None else True
+    return None
+
+
+def knob_values(opts):
+    vals = {}
+    for key, (flags, *_rest) in KNOBS.items():
+        v = get(opts, flags)
+        if v is not None:
+            vals[key] = v
+    if get(opts, ["--cpu-moe"]):
+        vals.setdefault("n-cpu-moe", "off (--cpu-moe)")
+    return vals
+
+
+def parse_change(text):
+    if "=" not in text:
+        die(f"„{text}”: zapis KLUCZ=WARTOŚĆ, np. ctx=49152 (klucze: {', '.join(KNOBS)})", 2)
+    key, raw = text.split("=", 1)
+    if key not in KNOBS:
+        die(f"„{key}” nie jest na białej liście (dozwolone: {', '.join(KNOBS)})", 2)
+    flags, kind, allowed, _ = KNOBS[key]
+    if key == "n-cpu-moe" and raw == "off":
+        return key, None
+    if kind is int:
+        if not re.fullmatch(r"\d+", raw):
+            die(f"{key}: liczba całkowita, dostałem „{raw}”", 2)
+        value = int(raw)
+        lo, hi = allowed
+        if not lo <= value <= hi:
+            die(f"{key}={value} poza zakresem {lo}–{hi}", 2)
+        if key == "ctx" and value % 1024:
+            die("ctx: wielokrotność 1024", 2)
+        return key, str(value)
+    if raw not in allowed:
+        die(f"{key}: jedna z {', '.join(allowed)}", 2)
+    return key, raw
+
+
+def apply_changes(opts, changes):
+    opts = list(opts)
+    for key, value in changes:
+        flags = KNOBS[key][0]
+        if key == "moe-cache" and not get(opts, ["--cpu-moe"]):
+            die("moe-cache działa tylko z --cpu-moe (najpierw n-cpu-moe=off)", 2)
+        if key == "n-cpu-moe":
+            if value is None:   # off → wszystkie eksperci w RAM + cache na GPU
+                opts = [o for o in opts if o[0] not in flags]
+                if not get(opts, ["--cpu-moe"]):
+                    opts.append(("--cpu-moe", None))
+                continue
+            # cache ekspertów jest tylko w trybie --cpu-moe
+            opts = [o for o in opts if o[0] not in ("--cpu-moe", "--moe-cache-mib")]
+        replaced = False
+        for i, (flag, _old) in enumerate(opts):
+            if flag in flags:
+                opts[i] = (flag, value); replaced = True
+        if not replaced:
+            opts.append((flags[0], value))
+    batch, ubatch = get(opts, KNOBS["batch"][0]), get(opts, KNOBS["ubatch"][0])
+    if batch and ubatch and int(batch) < int(ubatch):
+        die(f"batch ({batch}) mniejszy niż ubatch ({ubatch})", 2)
+    return opts
+
+
+def write_dropin(args):
+    os.makedirs(os.path.dirname(DROPIN), exist_ok=True)
+    tmp = DROPIN + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write(f"# freecode-tune: strojone flagi (rollback = freecode-tune -u {UNIT} rollback)\n"
+                "# ręczna zmiana flag w unicie/drop-inach nie zadziała, dopóki jest ten plik — potem: freecode-tune rebase\n"
+                f"# base: {systemd_join(base_args())}\n"
+                f"[Service]\nExecStart=\nExecStart={systemd_join(args)}\n")
+    os.replace(tmp, DROPIN)
+
+
+def recorded_base():
+    try:
+        for line in open(DROPIN, encoding="utf-8"):
+            if line.startswith("# base: "):
+                return systemd_split(line[len("# base: "):].strip())
+    except OSError:
+        pass
+    return None
+
+
+def drifted():
+    """Baza zapisana w tune.conf, jeśli ktoś zmienił unit/drop-iny po strojeniu (tune.conf ją przykrywa)."""
+    old = recorded_base()
+    return old if old is not None and old != base_args() else None
+
+
+def ensure_no_drift():
+    if drifted():
+        die(f"flagi w unicie zmienione ręcznie po strojeniu, a {DROPIN} je przykrywa — "
+            f"freecode-tune -u {UNIT} rebase (strojenie na nowej bazie) albo rollback (bez strojenia)", 5)
+
+
+def set_args(args):
+    if args == base_args():
+        if os.path.exists(DROPIN):
+            os.remove(DROPIN)
+    else:
+        write_dropin(args)
+    systemctl("daemon-reload")
+
+
+# ── serwer ──────────────────────────────────────────────────────────────────────────────────────
+def systemctl(*args, check=True):
+    r = subprocess.run(["systemctl", "--user", *args], capture_output=True, text=True)
+    if check and r.returncode:
+        die(f"systemctl --user {' '.join(args)}: {r.stderr.strip()}")
+    return r
+
+
+def server_port(args):
+    _, opts = to_options(args)
+    return int(get(opts, ["--port"]) or 8080)
+
+
+def http(port, path, body=None, timeout=600):
+    req = urllib.request.Request(f"http://127.0.0.1:{port}{path}",
+                                 data=json.dumps(body).encode() if body is not None else None,
+                                 headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return json.loads(r.read() or b"null")
+
+
+def busy(port):
+    """True = serwer właśnie liczy (np. inna sesja) — restart przerwałby czyjąś pracę."""
+    try:
+        slots = http(port, "/slots", timeout=3)
+    except (OSError, ValueError, urllib.error.URLError):
+        return False   # nie działa albo /slots wyłączone
+    return any(s.get("is_processing") for s in slots or [])
+
+
+def socket_port():
+    path = os.path.join(UNITS, SOCKET)
+    if not SOCKET or not os.path.exists(path):
+        return None
+    m = re.search(r"^ListenStream=(?:.*:)?(\d+)\s*$", open(path, encoding="utf-8").read(), re.M)
+    return int(m.group(1)) if m else None
+
+
+def running_matches(args):
+    """Czy działający proces ma dokładnie te flagi — mierzymy to, co próbujemy, a nie coś podstawionego."""
+    r = systemctl("show", "-p", "MainPID", "--value", UNIT, check=False)
+    pid = (getattr(r, "stdout", "") or "").strip()
+    if not pid:
+        return True   # nie da się sprawdzić (np. testy) — nie blokuj
+    if pid == "0":
+        return False  # unit bez procesu, a port odpowiada — to nie nasz serwer
+    try:
+        got = open(f"/proc/{pid}/cmdline", "rb").read().decode().split("\0")[:-1]
+    except (OSError, ValueError):
+        return True   # nie da się sprawdzić (np. testy) — nie blokuj
+    want = [re.sub(r'^"(.*)"$|^\'(.*)\'$', lambda m: m.group(1) or m.group(2) or "", a)
+            .replace("%h", os.path.expanduser("~")).replace("$$", "$") for a in args]
+    return got == want
+
+
+def wait_stopped():
+    """Zawieszony start (ExecStartPost czeka na /health) potrafi anulować stop — ponawiaj, aż unit zgaśnie,
+    inaczej jego stan „start-post bez procesu” wzięlibyśmy za padnięcie nowego serwera."""
+    for _ in range(30):
+        show = systemctl("show", "-p", "ActiveState", UNIT, check=False)
+        state = (getattr(show, "stdout", "") or "").strip()
+        if not state or state in ("ActiveState=inactive", "ActiveState=failed"):
+            return
+        systemctl("stop", UNIT, check=False)
+        time.sleep(1)
+
+
+def restart(args):
+    """Restart z nowymi flagami; zwraca (ok, ostatnie linie logu)."""
+    started = time.strftime("%Y-%m-%d %H:%M:%S")
+    sport = socket_port()
+    if sport:
+        # StopWhenUnneeded: sam unit bez proxy od razu by zgasł — zapytanie przez gniazdo budzi oba
+        systemctl("stop", PROXY, UNIT, check=False)
+        wait_stopped()
+        # gniazdo po serii nieudanych startów zostaje „failed” (trigger-limit-hit) i nie przyjmuje połączeń
+        systemctl("reset-failed", SOCKET, PROXY, UNIT, check=False)
+        systemctl("start", SOCKET, check=False)
+        wake = sport
+    else:
+        systemctl("stop", UNIT, check=False)
+        wait_stopped()
+        systemctl("reset-failed", UNIT, check=False)
+        systemctl("start", "--no-block", UNIT, check=False)
+        wake = server_port(args)
+    deadline = time.time() + LOAD_TIMEOUT
+    while time.time() < deadline:
+        try:
+            http(wake, "/health", timeout=10)
+            if not running_matches(args):
+                return False, "serwer działa z innymi flagami niż próba (strażnik albo ręczna zmiana unitu)"
+            return True, ""
+        except (OSError, ValueError, urllib.error.URLError):
+            # Restart=on-failure: padnięty serwer krąży w auto-restart, nigdy nie jest „failed” na stałe
+            show = systemctl("show", "-p", "ActiveState,SubState,MainPID", UNIT, check=False).stdout
+            if "SubState=auto-restart" in show or "ActiveState=failed" in show:
+                break
+            # serwer padł, a ExecStartPost (czekanie na /health) jeszcze trzyma unit w starcie — inaczej
+            # czekalibyśmy minutami, aż OnFailure= (strażnik) podstawi stare flagi i zmierzymy nie to
+            if "SubState=start-post" in show and "MainPID=0" in show:
+                break
+            if sport and "ActiveState=active" not in systemctl("show", "-p", "ActiveState", SOCKET, check=False).stdout:
+                break   # gniazdo padło — dalsze czekanie nic nie da
+            time.sleep(2)
+    log = subprocess.run(["journalctl", "--user", "-u", UNIT, "--since", started, "--no-pager", "-o", "cat"],
+                         capture_output=True, text=True).stdout.strip().splitlines()
+    return False, "\n".join(log[-12:])
+
+
+# ── pomiar ──────────────────────────────────────────────────────────────────────────────────────
+CODE = '''def merge_intervals(intervals):
+    """Merge overlapping [start, end] intervals."""
+    if not intervals:
+        return []
+    intervals.sort(key=lambda x: x[0])
+    merged = [list(intervals[0])]
+    for start, end in intervals[1:]:
+        if start <= merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], end)
+        else:
+            merged.append([start, end])
+    return merged
+
+
+class LRUCache:
+    def __init__(self, capacity):
+        self.capacity = capacity
+        self.items = {}
+        self.order = []
+
+    def get(self, key):
+        if key not in self.items:
+            return None
+        self.order.remove(key)
+        self.order.append(key)
+        return self.items[key]
+
+    def put(self, key, value):
+        if key in self.items:
+            self.order.remove(key)
+        elif len(self.items) >= self.capacity:
+            oldest = self.order.pop(0)
+            del self.items[oldest]
+        self.items[key] = value
+        self.order.append(key)
+'''
+
+
+def psi_full():
+    try:
+        m = re.search(r"^full .*total=(\d+)", open("/proc/pressure/memory").read(), re.M)
+        return int(m.group(1)) if m else 0
+    except OSError:
+        return 0
+
+
+def completion(port, prompt, n_predict):
+    r = http(port, "/completion", {"prompt": prompt, "n_predict": n_predict, "cache_prompt": False,
+                                   "temperature": 0, "seed": 1, "ignore_eos": True}, timeout=LOAD_TIMEOUT)
+    return r["timings"]
+
+
+def long_prompt(port, ctx):
+    """Prompt ~60% okna (max 40k tokenów) — tyle ma typowa sesja opencode z kontekstem projektu."""
+    target = min(int(ctx * 0.6), 40000)
+    unit = CODE + "\n"
+    n_unit = len(http(port, "/tokenize", {"content": unit})["tokens"])
+    parts = [f"# file {i}\n{unit.replace('merge_intervals', f'merge_{i}')}" for i in range(target // n_unit)]
+    return "".join(parts) + "\nSummarize the code above in one sentence."
+
+
+def test_png(w=1024, h=768):
+    """Gradient PNG bez bibliotek — obraz realnego rozmiaru, żeby serwer zaalokował bufory jak przy zrzucie ekranu."""
+    rows = b"".join(b"\0" + bytes(v for x in range(w) for v in (x * 255 // w, y * 255 // h, (x + y) % 256)) for y in range(h))
+    chunk = lambda t, d: struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d))
+    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(rows, 6)) + chunk(b"IEND", b""))
+
+
+def image_check(port):
+    """Model z --mmproj: obrazek potrzebuje dodatkowego VRAM (zmierzone: 9B przy ctx 128k padał na pierwszym
+    obrazku, brakowało 248 MiB). Test na samym tekście by tego nie wykrył."""
+    url = "data:image/png;base64," + base64.b64encode(test_png()).decode()
+    r = http(port, "/v1/chat/completions", {"max_tokens": 8, "messages": [{"role": "user", "content": [
+        {"type": "text", "text": "What colors are in this image? One word."},
+        {"type": "image_url", "image_url": {"url": url}}]}]}, timeout=LOAD_TIMEOUT)
+    return r["choices"][0]["message"] is not None
+
+
+def measure(args):
+    port = server_port(args)
+    _, opts = to_options(args)
+    ctx = int(get(opts, KNOBS["ctx"][0]) or 4096)
+    tests = {
+        "chat": ("Explain in detail how a hash map handles collisions, with examples.\n\n", 128, "predicted_per_second"),
+        "code": (CODE + "\nRepeat the code above exactly, without changes:\n\n", 256, "predicted_per_second"),
+        "prompt": (long_prompt(port, ctx), 8, "prompt_per_second"),
+    }
+    result, p0, t0 = {}, psi_full(), time.monotonic()
+    completion(port, "Hello", 4)   # rozgrzewka: pierwsze zapytanie po starcie płaci za inicjalizację
+    for name, (prompt, n, field) in tests.items():
+        best = 0.0
+        for _ in range(1 if name == "prompt" else 2):   # długi prompt jest stabilny, a na CPU trwa minuty
+            try:
+                best = max(best, completion(port, prompt, n)[field])
+            except (OSError, KeyError, ValueError, urllib.error.URLError) as e:
+                return {"error": f"{name}: {e}"}
+        result[name] = round(best, 1)
+    if get(opts, ["--mmproj", "-mm"]):
+        try:
+            image_check(port)
+            http(port, "/health", timeout=10)   # po obrazku serwer dalej żyje
+            result["image"] = "ok"
+        except (OSError, KeyError, ValueError, urllib.error.URLError) as e:
+            return {"error": f"obrazek (--mmproj): {e}"}
+    result["prompt_tokens"] = len(http(port, "/tokenize", {"content": tests["prompt"][0]})["tokens"])
+    result["mem_stall_pct"] = round((psi_full() - p0) / 1e4 / (time.monotonic() - t0), 1)   # µs → % czasu
+    result["score"] = round(math.prod(result[k] for k in ("chat", "code", "prompt")) ** (1 / 3), 1)
+    return result
+
+
+# ── stan ────────────────────────────────────────────────────────────────────────────────────────
+def load_state():
+    try:
+        return json.load(open(STATE, encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+
+def save_state(state):
+    os.makedirs(DATA, exist_ok=True)
+    json.dump(state, open(STATE, "w", encoding="utf-8"), indent=1, ensure_ascii=False)
+
+
+def log_history(entry):
+    os.makedirs(DATA, exist_ok=True)
+    with open(HISTORY, "a", encoding="utf-8") as f:
+        f.write(json.dumps({"date": time.strftime("%F %T"), "unit": UNIT, **entry}, ensure_ascii=False) + "\n")
+
+
+def fmt(m):
+    if "error" in m:
+        return f"BŁĄD {m['error']}"
+    return (f"wynik {m['score']} (czat {m['chat']}, kod {m['code']}, prompt {m['prompt']} tok/s "
+            f"przy {m['prompt_tokens']} tokenach; {'obrazek ok; ' if m.get('image') else ''}"
+            f"czekanie na pamięć {m['mem_stall_pct']}%)")
+
+
+def ensure_idle(args):
+    if busy(server_port(args)):
+        die("serwer właśnie liczy (trwa czyjaś sesja) — spróbuj, gdy skończy", 3)
+
+
+def cmd_bench():
+    ensure_no_drift()
+    args = current_args()
+    ensure_idle(args)
+    ok, log = restart(args)   # świeży start = te same warunki co po każdej próbie
+    if not ok:
+        die(f"serwer nie wstaje z obecnymi ustawieniami:\n{log}")
+    m = measure(args)
+    print(fmt(m))
+    if "error" in m or m["mem_stall_pct"] >= STALL_LIMIT:
+        die("pomiar nieważny — zamknij duże programy i powtórz", 4)
+    save_state({"good_args": args, "good": m})
+    log_history({"action": "bench", "args": args, "result": m})
+    print(f"✓ zapisane jako baza (GOOD) w {STATE}")
+
+
+def cmd_try(texts):
+    state = load_state()
+    if not state.get("good"):
+        die("brak bazy — najpierw: freecode-tune bench", 2)
+    ensure_no_drift()
+    changes = [parse_change(t) for t in texts]
+    good_args = state["good_args"]
+    prog, opts = to_options(good_args)
+    new_args = from_options(prog, apply_changes(opts, changes))
+    if new_args == good_args:
+        die("te wartości już są ustawione — nic do sprawdzenia", 2)
+    ensure_idle(good_args)
+    label = " ".join(texts)
+    print(f"próba: {label}")
+    set_args(new_args)
+    up, log = restart(new_args)
+    m = measure(new_args) if up else {"error": "serwer nie wstał:\n" + log}
+    good = state["good"]
+    old_ctx = int(get(opts, KNOBS["ctx"][0]) or 0)
+    new_ctx = int(get(to_options(new_args)[1], KNOBS["ctx"][0]) or 0)
+    need = CTX_TOLERANCE if new_ctx > old_ctx else KEEP_GAIN
+    if "error" in m:
+        verdict, why = "cofnięte", m["error"]
+    elif m["mem_stall_pct"] >= STALL_LIMIT:
+        verdict, why = "cofnięte", f"pomiar zakłócony brakiem RAM ({m['mem_stall_pct']}% czekania) — powtórz po zamknięciu programów"
+    elif m["score"] >= good["score"] * need:
+        verdict, why = "zostaje", f"wynik {good['score']} → {m['score']} ({m['score'] / good['score'] - 1:+.1%})"
+    else:
+        verdict, why = "cofnięte", (f"wynik {good['score']} → {m['score']} ({m['score'] / good['score'] - 1:+.1%}, "
+                                   f"potrzeba ≥ {need - 1:+.0%})")
+    if "error" not in m:
+        print(fmt(m))
+    if verdict == "zostaje":
+        save_state({"good_args": new_args, "good": m})
+    else:
+        set_args(good_args)
+        back, log = restart(good_args)
+        if not back:
+            die(f"UWAGA: po cofnięciu serwer nie wstał — freecode-tune rollback\n{log}")
+    log_history({"action": "try", "change": label, "verdict": verdict, "why": why, "result": m,
+                 "before": good["score"]})
+    print(f"{'✓' if verdict == 'zostaje' else '↩'} {verdict}: {why}")
+
+
+def cmd_rollback():
+    args = base_args()
+    ensure_idle(current_args())
+    set_args(args)
+    save_state({})   # baza mierzona na strojonych flagach już nie obowiązuje — także gdy start niżej padnie
+    log_history({"action": "rollback", "args": args})
+    ok, log = restart(args)
+    if not ok:
+        die(f"serwer nie wstaje nawet z ustawieniami bootstrapu:\n{log}")
+    print("✓ ustawienia sprzed strojenia przywrócone; baza wyczyszczona — przed kolejnymi próbami: freecode-tune bench")
+
+
+def cmd_rebase():
+    old = drifted()
+    if not old:
+        print("baza bez zmian od strojenia — nic do zrobienia"); return
+    _, old_opts = to_options(old)
+    _, tuned_opts = to_options(current_args())
+    prog, opts = to_options(base_args())
+    changes, dropped = [], []
+    for key, (flags, *_rest) in KNOBS.items():
+        was, now = get(old_opts, flags), get(tuned_opts, flags)
+        if was == now:
+            continue
+        if now is not None:
+            changes.append((key, now))
+        elif key == "n-cpu-moe":
+            changes.append((key, None))
+        else:
+            dropped.append(flags)
+    changes.sort(key=lambda c: c[0] != "n-cpu-moe")   # najpierw tryb MoE, bo moe-cache wymaga --cpu-moe
+    for flags in dropped:   # strojenie usunęło flagę (rzadkie) — usuń też z nowej bazy
+        opts = [o for o in opts if o[0] not in flags]
+    new = from_options(prog, apply_changes(opts, changes))
+    set_args(new)
+    save_state({})   # stary wynik mierzył inne flagi
+    log_history({"action": "rebase", "args": new, "changes": [f"{k}={'off' if v is None else v}" for k, v in changes]})
+    print("strojone zmiany na nowej bazie: " + (", ".join(f"{k}={'off' if v is None else v}" for k, v in changes) or "brak"))
+    print(f"✓ zapisane; działa od następnego startu serwera. Przed kolejnymi próbami: freecode-tune -u {UNIT} bench")
+
+
+def cmd_status():
+    args = current_args()
+    _, opts = to_options(args)
+    state = load_state()
+    print(f"unit: {UNIT}{' + zmiany strojenia (' + DROPIN + ')' if os.path.exists(DROPIN) else ' (bez zmian strojenia)'}")
+    print("flagi: " + " ".join(args[1:]))
+    if drifted():
+        print(f"! flagi w unicie zmienione ręcznie po strojeniu — NIE działają, bo przykrywa je tune.conf; "
+              f"napraw: freecode-tune -u {UNIT} rebase")
+    d = os.path.dirname(DROPIN)
+    for f in sorted(os.listdir(d)) if os.path.isdir(d) else []:
+        if f.startswith("tune.conf.failed-"):
+            print(f"! strażnik odsunął zmiany strojenia po awarii: {os.path.join(d, f)}")
+    vals = knob_values(opts)
+    print("\nbiała lista (klucz = teraz; zakres — opis):")
+    for key, (_flags, kind, allowed, desc) in KNOBS.items():
+        span = f"{allowed[0]}–{allowed[1]}" if kind is int else "|".join(allowed)
+        print(f"  {key} = {vals.get(key, '(domyślne llama.cpp)')};  {span} — {desc}")
+    print("\nbaza (GOOD): " + (fmt(state["good"]) if state.get("good") else "brak — uruchom: freecode-tune bench"))
+    try:
+        hist = [h for h in map(json.loads, open(HISTORY, encoding="utf-8")) if h.get("unit", UNIT) == UNIT][-10:]
+    except OSError:
+        hist = []
+    if hist:
+        print("\nostatnie próby:")
+        for h in hist:
+            if h["action"] == "try":
+                print(f"  {h['date']}  {h['change']}: {h['verdict']} — {h['why'].splitlines()[0]}")
+            else:
+                print(f"  {h['date']}  {h['action']}")
+    if os.path.exists(REPORT) and UNIT == "freecode-llama.service":
+        r = json.load(open(REPORT, encoding="utf-8"))
+        print(f"\nkalibracja bootstrapu ({r.get('date')}): wybrane {r.get('chosen')}; "
+              + ", ".join(f"{c['device']} {c['tok_s']} tok/s" for c in r.get("candidates", [])))
+
+
+def cmd_units():
+    if not os.path.isdir(UNITS):
+        die(f"brak {UNITS}")
+    for f in sorted(os.listdir(UNITS)):
+        if not f.endswith(".service") or "@" in f:
+            continue
+        select_unit(f)
+        args = exec_start(unit_files(True))
+        if args and re.search(r"llama-server$", args[0].strip("\"'")):
+            _, opts = to_options(args)
+            model = os.path.basename(str(get(opts, ["-m", "--model"]) or "?"))
+            mode = "na żądanie przez " + SOCKET if os.path.exists(os.path.join(UNITS, SOCKET)) else "start wprost"
+            print(f"  {f[:-len('.service')]:24} {model}  ({mode}{', strojony' if os.path.exists(DROPIN) else ''})")
+
+
+def take_lock():
+    """Jedno strojenie naraz na cały komputer — usługi dzielą kartę (Conflicts=), równoległe pomiary się psują."""
+    os.makedirs(DATA, exist_ok=True)
+    global _lock
+    _lock = open(os.path.join(DATA, "tune.lock"), "w")
+    try:
+        fcntl.flock(_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        die("trwa inne strojenie (freecode-tune) — poczekaj, aż skończy", 3)
+
+
+def main(argv):
+    if argv[:1] in (["-u"], ["--unit"]):
+        if len(argv) < 2:
+            die("-u NAZWA_USŁUGI", 2)
+        select_unit(argv[1]); argv = argv[2:]
+    if not argv or argv[0] in ("-h", "--help"):
+        print(__doc__.strip()); return
+    cmd, rest = argv[0], argv[1:]
+    if cmd in ("bench", "try", "rollback", "rebase"):
+        take_lock()
+    if cmd == "units": cmd_units()
+    elif cmd == "status": cmd_status()
+    elif cmd == "bench": cmd_bench()
+    elif cmd == "try" and rest: cmd_try(rest)
+    elif cmd == "rollback": cmd_rollback()
+    elif cmd == "rebase": cmd_rebase()
+    else: die(f"nieznane polecenie: {' '.join(argv)} (freecode-tune --help)", 2)
+
+
+if __name__ == "__main__":
+    main(sys.argv[1:])

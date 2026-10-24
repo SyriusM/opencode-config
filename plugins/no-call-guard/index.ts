@@ -53,17 +53,33 @@ const ACTION = /(?<!\p{L})(wykonaj|uruchom|odpal|sprawdź|sprawdz|przeczytaj|wy�
 // tool call written as TEXT instead of a real call (Gemma 4, 10-21): `tools.shell({...})` from the Code Mode API,
 // `<shell command="..."/>`, `shell(command=...)`. Unambiguous -> fires without an action verb in the prompt.
 const FAKE_CALL = /(?<![\w.])tools\.\w+\s*\(|<\s*(?:shell|bash|read|edit|write|execute|grep|glob)\b[^>\n]*\/?>|(?<![\w.])(?:shell|bash|execute)\s*\(\s*(?:command\s*=|\{)/i
+const PROMPT_CMD = /:[ \t]*\n\s*(?:cat|ls|head|tail|wc|grep|find|stat|du|df|file|sort|diff|python3?|bash|sh|git)\s+\S/
+const DONE_CLAIM = /(?<!\bnie\s)(?<!\p{L})(usunąłem|usunęłam|zmieniłem|zmieniłam|utworzyłem|utworzyłam|stworzyłem|skopiowałem|przeniosłem|zapisałem|zmodyfikowałem|poprawiłem|wykonałem|uruchomiłem|zainstalowałem|zaktualizowałem|edytowałem|dodałem)(?!\p{L})[^\n]{0,40}?(plik|katalog|folder|`|\/)/iu
+const HANDOFF_SCRIPT = /r(?:ę|e)cznie[\s\S]{0,200}?sudo\s+(?:(?:bash|sh)\s+)?[`'"]?\S*?([\w.-]+\.sh)\b/iu
 const HOWTO = /^\s*(jak|how|w jaki sposób|czy da się|czy można)(?!\p{L})/iu
 
 // czysta funkcja — testowana bez opencode
-export function shouldFire(userText: string, assistantText: string, calls: number): boolean {
-  if (calls > 0) return false
+export function shouldFire(userText: string, assistantText: string, calls: number, lastStepText = ""): boolean {
   if (HOWTO.test(userText)) return false
+  // 10-23 Gemma (08-long-file-lookup): two real reads, then the last step ends with `print(shell(command="grep …"))`
+  // as text — the earlier calls must not hide a fake call in the step that ends the turn
+  if (FAKE_CALL.test(lastStepText)) return true
+  if (calls > 0) return false
   if (FAKE_CALL.test(assistantText)) return true
   // poprawne przekazanie komendy roota użytkownikowi (zadania 09/19) — tu brak wywołania jest właściwy
-  if (HANDOFF.test(assistantText)) return false
+  // 10-23 Gemma (19-no-sudo-multi): zero calls, "Uruchom RĘCZNIE: sudo bash …/setup.sh" — the script was never
+  // written, so this hand-off is fabricated too (unless the script comes from the user's prompt)
+  const hs = assistantText.match(HANDOFF_SCRIPT)
+  if (HANDOFF.test(assistantText)) return !!hs && ACTION.test(userText) && !userText.includes(hs[1])
   if (!ACTION.test(userText)) return false
   const blocks = assistantText.match(ANY_BLOCK) ?? []
+  // 10-23 Gemma KV q4 (01-verbatim): prompt names the exact command, zero calls, answer is a block of "output"
+  // whose first line ("data.txt:") is not from the prompt — any block here is fabricated
+  if (blocks.length >= 1 && PROMPT_CMD.test(userText)) return true
+  // 10-23 Gemma (11-missing-file): zero calls, "<file_deleted>Usunąłem plik …</file_deleted>" — a past-tense
+  // claim of having done the action is false when nothing was called
+  const claim = assistantText.match(DONE_CLAIM)
+  if (claim && !userText.toLowerCase().includes(claim[1].toLowerCase())) return true
   // sygnatura zmyślenia: blok komendy + co najmniej jeden INNY blok (rzekome wyjście)
   if (SHELL_BLOCK.test(assistantText) && blocks.length >= 2) return true
   // albo blok (z językiem lub bez) przepisuje komendę z promptu zamiast ją wywołać
@@ -91,8 +107,8 @@ export default {
     session: { synthetic: (o: Record<string, unknown>) => Promise<unknown> }
   }) {
     const controller = new AbortController()
-    async function fire(sessionID: string, s: State, delivery: "steer" | "queue") {
-      if (s.fired || !shouldFire(s.user, s.text, s.calls)) return
+    async function fire(sessionID: string, s: State, delivery: "steer" | "queue", lastStepText = "") {
+      if (s.fired || !shouldFire(s.user, s.text, s.calls, lastStepText)) return
       s.fired = true // maks. raz na prompt użytkownika — bez pętli
       log(`HIT ${sessionID} mode=${MODE} via=${delivery} user=${JSON.stringify(s.user.slice(0, 120))} text=${JSON.stringify(s.text.slice(0, 200))}`)
       if (MODE !== "act") return
@@ -165,7 +181,7 @@ export default {
               s.stepText = ""
               if (d.finish === "tool-calls") break
               if (isEmptyTurn(stepText, s.calls, d.finish)) await fireEmpty(sessionID, s)
-              else await fire(sessionID, s, "steer")
+              else await fire(sessionID, s, "steer", stepText)
               break
             }
             case "session.execution.succeeded":
