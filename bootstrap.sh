@@ -82,7 +82,15 @@ port_free() { ! (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null; }
 download() { # download URL PLIK — z paskiem postępu, wznawia przerwane (.part)
   [ -f "$2" ] && return 0
   mkdir -p "$(dirname "$2")"
-  curl -fL --retry 3 -C - --progress-bar -o "$2.part" "$1" && mv "$2.part" "$2"
+  curl -fL --retry 3 -C - --progress-bar -o "$2.part" "$1" || return 1
+  if [ -z "$3" ]; then warn "źródło nie podało sumy sha256 dla $(basename "$2") — bez sprawdzenia"
+  elif ! echo "$3  $2.part" | sha256sum -c --quiet - >/dev/null 2>&1; then
+    rm -f "$2.part"; fail "zła suma sha256 pliku $(basename "$2") — usunięty, uruchom ponownie"
+  fi
+  mv "$2.part" "$2"
+}
+hf_sha256() { # hf_sha256 URL — sha256 pliku LFS z nagłówka X-Linked-ETag Hugging Face
+  curl -fsI -m 20 "$1" 2>/dev/null | tr -d '\r"' | awk 'tolower($1)=="x-linked-etag:" && $2 ~ /^[0-9a-f]{64}$/ {print $2}'
 }
 
 # ── 0. obecna konfiguracja ───────────────────────────────────────────────────────────────────
@@ -252,8 +260,13 @@ for r in json.load(sys.stdin):
   LLAMA_DIR="$DATA/llama.cpp/$tag-$BACKEND"
   if [ ! -x "$LLAMA_DIR/llama-server" ]; then
     yes_no "Pobrać llama.cpp $tag ($BACKEND)$([ -n "$extra" ] && echo ' + biblioteki CUDA, ~600 MB')?" || fail "bez llama.cpp nie ruszymy"
+    digests="$(curl -fsS -m 20 "$LLAMA_RELEASES/tags/$tag" | python3 -c "
+import json, sys
+for a in json.load(sys.stdin)['assets']:
+    print(a['name'], (a.get('digest') or '').removeprefix('sha256:'))" 2>/dev/null || true)"
     for pkg in "llama-$tag-bin-$suffix.tar.gz" ${extra:+"${extra}llama-$tag-bin-$suffix.tar.gz"}; do
-      download "https://github.com/ggml-org/llama.cpp/releases/download/$tag/$pkg" "$DATA/download/$pkg"
+      download "https://github.com/ggml-org/llama.cpp/releases/download/$tag/$pkg" "$DATA/download/$pkg" \
+        "$(awk -v n="$pkg" '$1==n {print $2}' <<<"$digests")" || fail "pobieranie $pkg przerwane"
       mkdir -p "$LLAMA_DIR"; tar xzf "$DATA/download/$pkg" -C "$LLAMA_DIR" --strip-components=1
     done
     rm -rf "$DATA/download"
@@ -263,7 +276,7 @@ for r in json.load(sys.stdin):
 
   if [ ! -f "$MODEL_FILE" ]; then
     yes_no "Pobrać model $HF_FILE z Hugging Face (~$SIZE_GB GB)?" || fail "bez modelu freecode nie ruszy"
-    download "$HF/$HF_REPO/resolve/main/$HF_FILE" "$MODEL_FILE" || fail "pobieranie modelu przerwane — uruchom ponownie, wznowi od miejsca przerwania"
+    download "$HF/$HF_REPO/resolve/main/$HF_FILE" "$MODEL_FILE" "$(hf_sha256 "$HF/$HF_REPO/resolve/main/$HF_FILE")" || fail "pobieranie modelu przerwane — uruchom ponownie, wznowi od miejsca przerwania"
   fi
   ok "model $MODEL_FILE"
 
