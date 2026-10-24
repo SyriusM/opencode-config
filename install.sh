@@ -225,6 +225,11 @@ for f in AGENTS.md prompts/general.txt prompts/coder.txt prompts/reasoner.txt pr
   # zasady pracy i prompty agentów: tylko gdy ich brak — własnych nie nadpisujemy
   if [ -f "$CFG/opencode/$f" ]; then ok "$f — zostaje twój"; else install_file "$REPO/agents/$f" "$CFG/opencode/$f" 644; ok "$f"; fi
 done
+for f in AGENTS.md prompts/general.txt prompts/coder.txt prompts/reasoner.txt prompts/reviewer.txt; do
+  # wzorce dla `freecode --optimize` (porównanie z twoimi plikami); to kopie z repo, nie twoje pliki
+  install_file "$REPO/agents/$f" "${XDG_DATA_HOME:-$HOME/.local/share}/freecode/agents/$f" 644
+done
+ok "wzorce agents/ dla freecode --optimize"
 install_file "$REPO/freecode/freecode" "$BIN/freecode" 755; ok "~/bin/freecode (opencode tylko na lokalnych modelach)"
 mkdir -p "$HOME/oc-audyt/kopalnia" "$HOME/oc-audyt/auto-kopie" "$HOME/tmp-opencode" "$HOME/mempalace/audit"
 if [ -z "$(ls -A "$HOME/oc-audyt/kopalnia" 2>/dev/null)" ]; then

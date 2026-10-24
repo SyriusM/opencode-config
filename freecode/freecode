@@ -4,6 +4,7 @@
   freecode [argumenty opencode]   sprawdza konfigurację i uruchamia opencode (TUI albo `run`)
   freecode --configure           konfigurator (sam odpala się tylko raz, przy pierwszym starcie)
   freecode --check                tylko kontrola konfiguracji (kod 0 = można startować)
+  freecode --optimize            porównaj konfigurację ze wzorcem, popraw za zgodą, wybierz styl pracy modelu
   freecode --env                  odśwież opis komputera w AGENTS.md (system, GPU, model)
   freecode --version              wersja freecode i opencode pod spodem
 
@@ -427,6 +428,180 @@ def configure():
     mark_configured(); return 0
 
 
+# ── optymalizacja: porównanie z wzorcem + preferencje pracy ──────────────────────────────────
+PREFS_START, PREFS_END = "<!-- PREFS:START -->", "<!-- PREFS:END -->"
+PREFS = [  # (klucz, pytanie, {odpowiedź: reguła dla modelu}, domyślna)
+    ("options", "Gdy zadanie da się zrobić na kilka sposobów:", {
+        "a": "Different paths forward → offer 2–5 numbered options (recommendation first) and WAIT for the choice.",
+        "b": "Offer options only for big or risky tasks; small ones — pick the best way and say which.",
+        "c": "Pick the best way yourself, say in one line what you chose and why, go on."}, "a"),
+    ("narration", "Opis pracy:", {
+        "a": "Describe EVERY step: before each tool call what and why, after it what came out.",
+        "b": "Short progress line every few steps + full summary of changes at the end.",
+        "c": "Only the final summary: every change, what was verified, what is left."}, "a"),
+    ("risk", "Zmiany w systemie:", {
+        "a": "Ask before every edit or command that changes anything.",
+        "b": "Edit project files freely; ask before deleting, installing, sudo, services, network.",
+        "c": "Act on your own, with backups; ask only before irreversible actions."}, "b"),
+    ("language", "Język odpowiedzi:", {
+        "a": "Answer in Polish.", "b": "Answer in English.", "c": "Answer in the user's language."}, "c"),
+]
+
+
+def template_dir():
+    for d in (os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "agents"),
+              os.path.join(os.environ.get("XDG_DATA_HOME") or os.path.join(HOME, ".local", "share"), "freecode", "agents")):
+        if os.path.isfile(os.path.join(d, "AGENTS.md")):
+            return d
+    return None
+
+
+def sections(text):
+    """{nagłówek ## : treść sekcji} — bez bloków ENV/PREFS."""
+    out, name = {}, None
+    for line in text.splitlines(keepends=True):
+        if line.startswith("## "):
+            name = line[3:].strip(); out[name] = line
+        elif name:
+            out[name] += line
+    return out
+
+
+def current_prefs(text):
+    got = {}
+    if PREFS_START in text:
+        for line in text.split(PREFS_START, 1)[1].split(PREFS_END, 1)[0].splitlines():
+            if line.startswith("<!-- pref "):
+                k, _, v = line[10:].partition("=")
+                got[k.strip()] = v.split("-->")[0].strip()
+    return got
+
+
+def write_block(start, end, block, before=None):
+    text = open(AGENTS_FILE, encoding="utf-8").read() if os.path.isfile(AGENTS_FILE) else ""
+    full = f"{start}\n{block}\n{end}"
+    if start in text and end in text:
+        head, rest = text.split(start, 1)
+        text = head + full + rest.split(end, 1)[1]
+    elif before and before in text:
+        i = text.index(before); text = text[:i] + full + "\n\n" + text[i:]
+    else:
+        text = (text.rstrip("\n") + "\n\n" if text else "") + full + "\n"
+    tmp = AGENTS_FILE + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write(text)
+    os.replace(tmp, AGENTS_FILE)
+
+
+def optimize():
+    """Sprawdza konfigurację względem wzorca, proponuje poprawki (t/n) i pyta o styl pracy (a/b/c)."""
+    info("freecode — optymalizacja pracy (każda zmiana z pytaniem; FREECODE_YES = domyślne odpowiedzi)")
+    yes = lambda q: tty_input(q + " (t/n)", "t").lower().startswith(("t", "y"))
+    gfile = next((os.path.join(OC_DIR, n) for n in CONFIG_NAMES if os.path.isfile(os.path.join(OC_DIR, n))), None)
+    if not gfile:
+        info(color(31, "  brak opencode.json — najpierw: freecode --configure")); return 1
+    try:
+        c = jsonc(open(gfile, encoding="utf-8").read())
+    except ValueError as e:
+        info(color(31, f"  {gfile} uszkodzony ({e})")); return 1
+    changed, n_ok = False, 0
+
+    # 1. kontekst głównego modelu względem serwera (pytamy tylko serwer głównego modelu — inne by się budziły)
+    pid, _, mname = (c.get("model") or "").partition("/")
+    prov = (c.get("provider") or {}).get(pid) or {}
+    url = (prov.get("options") or {}).get("baseURL")
+    entry = (prov.get("models") or {}).get(mname)
+    ctx = server_ctx(url) if url else None
+    if entry is not None and ctx:
+        lim = (entry.get("limit") or {}).get("context")
+        if not lim or lim > ctx:
+            info(color(33, f"  ! {c['model']}: limit.context = {lim or 'brak'}, serwer daje {ctx} na rozmowę"
+                           + (" — opencode przepełni okno" if lim else " — opencode nie wie, kiedy kompaktować")))
+            if yes(f"Ustawić limit.context = {ctx}, output = {min(8192, ctx // 4)}?"):
+                entry["limit"] = {"context": ctx, "output": min(8192, ctx // 4)}; changed = True
+        else:
+            n_ok += 1; info(color(32, f"  ok kontekst: {lim} z {ctx}" + (" (mniej — celowo, mniej RAM na cache)" if lim < ctx else "")))
+    elif url:
+        info(color(2, f"  - kontekst: serwer {url} nie podał /props (nie llama.cpp albo śpi) — pomijam"))
+
+    # 2. small_model lokalny
+    if not c.get("small_model") and c.get("model"):
+        info(color(33, "  ! brak small_model — tytuły sesji mogą iść do chmury"))
+        if yes(f"Ustawić small_model = {c['model']}?"):
+            c["small_model"] = c["model"]; changed = True
+    else:
+        n_ok += 1
+
+    # 3. agenci ze wzorca
+    tdir = template_dir()
+    agents = c.setdefault("agent", {})
+    for a, (mode, edit) in AGENT_PROMPTS.items():
+        if a in agents:
+            n_ok += 1; continue
+        dst = os.path.join(OC_DIR, "prompts", f"{a}.txt")
+        src = os.path.join(tdir, "prompts", f"{a}.txt") if tdir else ""
+        if not os.path.isfile(dst) and not os.path.isfile(src):
+            continue
+        info(color(33, f"  ! brak agenta `{a}` ({mode}{'' if edit else ', bez edycji'})"))
+        if yes(f"Dodać agenta `{a}`?"):
+            if not os.path.isfile(dst):
+                os.makedirs(os.path.dirname(dst), exist_ok=True); shutil.copy2(src, dst)
+            agents[a] = {"mode": mode, "prompt": f"{{file:./prompts/{a}.txt}}", **({} if edit else {"permission": {"edit": "deny"}})}
+            changed = True
+    if not agents:
+        c.pop("agent")
+    if changed:
+        save(gfile, c)
+
+    # 4. sekcje AGENTS.md ze wzorca, których brakuje u użytkownika (istniejących nie ruszamy)
+    if tdir:
+        mine = open(AGENTS_FILE, encoding="utf-8").read() if os.path.isfile(AGENTS_FILE) else ""
+        have = sections(mine)
+        missing = [(k, v) for k, v in sections(open(os.path.join(tdir, "AGENTS.md"), encoding="utf-8").read()).items()
+                   if k not in have and not k.startswith("Environment")]
+        if missing:
+            info(color(33, "  ! w AGENTS.md brakuje sekcji: " + ", ".join(k for k, _ in missing)))
+            if yes("Dopisać je (przed Learned Rules, reszta pliku bez zmian)?"):
+                if os.path.isfile(AGENTS_FILE):
+                    shutil.copy2(AGENTS_FILE, f"{AGENTS_FILE}.bak-{time.strftime('%Y%m%d-%H%M%S')}")
+                add = "".join(v.rstrip("\n") + "\n\n" for k, v in missing if k != "Learned Rules")
+                if "## Learned Rules" in mine:
+                    i = mine.index("## Learned Rules"); mine = mine[:i] + add + mine[i:]
+                else:
+                    mine = mine.rstrip("\n") + "\n\n" + add + dict(missing).get("Learned Rules", "")
+                tmp = AGENTS_FILE + ".tmp"
+                with open(tmp, "w", encoding="utf-8") as f:
+                    f.write(mine)
+                os.replace(tmp, AGENTS_FILE); info(color(32, f"  dopisano {len(missing)} sekcji"))
+        else:
+            n_ok += 1
+    else:
+        info(color(2, "  - brak wzorca agents/ (repo albo ~/.local/share/freecode/agents) — pomijam AGENTS.md"))
+
+    # 5. preferencje pracy
+    text = open(AGENTS_FILE, encoding="utf-8").read() if os.path.isfile(AGENTS_FILE) else ""
+    prev = current_prefs(text)
+    info("  Styl pracy modelu (Enter = obecny wybór):")
+    chosen = {}
+    for key, question, answers, default in PREFS:
+        info(f"  {question}")
+        for letter, rule in answers.items():
+            info(f"    {letter}) {rule}")
+        a = tty_input("Wybór (a/b/c)", prev.get(key, default)).lower()[:1]
+        chosen[key] = a if a in answers else prev.get(key, default)
+    lines = ["## Work Preferences (chosen by the user: `freecode --optimize`; these override other sections)"]
+    lines += [f"<!-- pref {k}={chosen[k]} -->\n- {ans[chosen[k]]}" for k, _, ans, _ in PREFS]
+    write_block(PREFS_START, PREFS_END, "\n".join(lines), before="## Show Your Work")
+    info(color(32, "  zapisano preferencje: " + ", ".join(f"{k}={v}" for k, v in chosen.items())))
+
+    # 6. opis komputera i strojenie serwera
+    write_env()
+    if shutil.which("freecode-tune"):
+        info(color(2, "  - szybkość serwera: `freecode-tune status` / w opencode „dostrój model” (mierzy i cofa, gdy gorzej)"))
+    info(color(32, f"  gotowe ({n_ok} rzeczy było w porządku). Usługa wczyta zmiany przy następnym starcie freecode."))
+    return 0
+
+
 # ── usługa w tle (TUI) ───────────────────────────────────────────────────────────────────────
 SERVICE_JSON = os.path.join(HOME, ".local", "state", "opencode", "service.json")
 
@@ -532,6 +707,8 @@ def main(argv):
         write_env(); return 0
     if argv[:1] == ["--configure"]:
         return configure()
+    if argv[:1] in (["--optimize"], ["--optymalizuj"]):
+        return optimize()
     if not os.path.exists(MARKER) and not os.path.exists(OLD_MARKER) and argv[:1] != ["--check"]:
         code = configure()
         if code:

@@ -468,6 +468,10 @@ FREECODE_YES=1 FREECODE_URL="$URL" FREECODE_MODEL="$MODEL" python3 "$REPO/freeco
 installer=("$REPO/install.sh"); [ "$YES" = 1 ] && installer+=(-y)
 "${installer[@]}" </dev/null || fail "install.sh zakończył się błędem"
 
+# styl pracy modelu + porównanie ze wzorcem (pyta przez /dev/tty; przy -y domyślne odpowiedzi)
+if [ "$YES" = 1 ]; then FREECODE_YES=1 "$BIN/freecode" --optimize; else "$BIN/freecode" --optimize; fi ||
+  warn "freecode --optimize nie przeszedł — uruchom ponownie później"
+
 # ── 6. kontrola ──────────────────────────────────────────────────────────────────────────────
 echo "[bootstrap 6/6] Kontrola"
 "$BIN/freecode" --check || fail "freecode --check nie przechodzi"
