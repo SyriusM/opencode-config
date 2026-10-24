@@ -27,6 +27,7 @@ Zgodność wstecz: --konfiguruj, --sprawdz, FREECODE_HOSTY i FREECODE_TAK też d
 import ipaddress
 import json
 import os
+import pwd
 import shutil
 import subprocess
 import sys
@@ -251,11 +252,12 @@ def run_out(cmd):
 
 
 def server_ctx(url):
-    """Rozmiar kontekstu z /props llama.cpp; None dla innych serwerów."""
+    """Kontekst na jedną rozmowę z /props llama.cpp (n_ctx dzielone na sloty); None dla innych serwerów."""
     base = url.rstrip("/").removesuffix("/v1")
     try:
         with urllib.request.urlopen(base + "/props", timeout=5) as r:
-            return int(json.load(r)["default_generation_settings"]["n_ctx"])
+            d = json.load(r)
+        return int(d["default_generation_settings"]["n_ctx"]) // max(1, int(d.get("total_slots") or 1))
     except (OSError, ValueError, KeyError, TypeError):
         return None
 
@@ -292,10 +294,14 @@ def env_facts(url, model):
                         if any(k in l for k in ("VGA", "3D controller", "Display controller")))
     desktop = " ".join(x for x in (os.environ.get("XDG_CURRENT_DESKTOP"), os.environ.get("XDG_SESSION_TYPE")) if x)
     ctx = server_ctx(url) if url else None
+    try:  # powłoka logowania z passwd — $SHELL bywa nadpisany przez terminal albo narzędzie
+        login_shell = os.path.basename(pwd.getpwuid(os.getuid()).pw_shell)
+    except (KeyError, OSError):
+        login_shell = os.path.basename(os.environ.get("SHELL") or "?")
     lines = [
         f"- OS: {osr.get('PRETTY_NAME') or os.uname().sysname} ({os.uname().release}), packages: `{pkg}`" +
         (" — never apt" if pkg == "pacman" else ""),
-        f"- User shell: `{os.path.basename(os.environ.get('SHELL') or '?')}` (tool commands: simple POSIX, one per call), home `{HOME}`",
+        f"- User shell: `{login_shell}` (tool commands: simple POSIX, one per call), home `{HOME}`",
         f"- Desktop: {desktop or 'none / unknown'}",
         f"- CPU: {cpu}, {os.cpu_count()} threads; RAM {ram} GB",
         f"- GPU: {gpu or 'none detected'}",
@@ -320,8 +326,10 @@ def write_env(url=None, model=None):
     else:
         text = (text.rstrip("\n") + "\n\n" if text else "") + block + "\n"
     os.makedirs(OC_DIR, exist_ok=True)
-    with open(AGENTS_FILE, "w", encoding="utf-8") as f:
+    tmp = AGENTS_FILE + ".tmp"            # zapis atomowy — w AGENTS.md są reguły użytkownika
+    with open(tmp, "w", encoding="utf-8") as f:
         f.write(text)
+    os.replace(tmp, AGENTS_FILE)
     info(color(32, f"  środowisko wpisane do {AGENTS_FILE}"))
 
 
@@ -498,7 +506,6 @@ def opencode_version(oc):
                 pass
         d = os.path.dirname(d)
     try:
-        import subprocess
         r = subprocess.run([oc, "--version"], capture_output=True, text=True, timeout=10)
         return (r.stdout.strip().split() or ["?"])[-1].lstrip("v")
     except (OSError, subprocess.SubprocessError):
@@ -536,13 +543,16 @@ def main(argv):
             info(f"  - {p}")
         info("Popraw konfigurację albo uruchom: freecode --configure")
         return 1
-    if os.path.isfile(AGENTS_FILE) and time.time() - os.path.getmtime(AGENTS_FILE) > 86400:
-        try:
-            write_env()  # opis komputera świeży co najwyżej o dobę (zmiana karty, modelu, kontekstu)
-        except OSError:
-            pass
     if argv[:1] == ["--check"]:
         info(color(32, "freecode: konfiguracja lokalna")); return 0
+    if os.path.isfile(AGENTS_FILE):
+        age = os.path.getmtime(AGENTS_FILE)
+        cfgs = [os.path.getmtime(p) for p, c in sources(directory) if c is None]
+        if time.time() - age > 86400 or any(t > age for t in cfgs):
+            try:
+                write_env()  # opis komputera świeży: najwyżej doba albo zmiana configu (model, kontekst)
+            except OSError:
+                pass
 
     oc = os.environ.get("FREECODE_OPENCODE") or shutil.which("opencode")
     if not oc:
