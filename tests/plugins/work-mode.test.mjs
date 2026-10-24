@@ -10,6 +10,8 @@ eq("forced step", detectMode(["run"], { FREECODE_MODE: "step" }), "step")
 eq("forced auto", detectMode([], { FREECODE_MODE: "AUTO" }), "auto")
 eq("bad env ignored", detectMode([], { FREECODE_MODE: "x" }), "step")
 eq("auto line", modeLine("auto").startsWith("WORK MODE: auto"), true)
+eq("auto line keeps one-part rule", modeLine("auto").includes("one part per session"), true)
+eq("follow-up list without question is not stuck", isStuck("Zrobione: A.\nNastępne do naprawy:\n1. B\n2. C", 0), false)
 let cb
 await plugin.setup({ session: { hook: async (_n, f) => { cb = f } } })
 const p = { system: [] }
@@ -61,4 +63,4 @@ process.env.WORK_MODE = "off"
 await plugin.setup({ session: { hook: async () => { pushed = true } } })
 delete process.env.WORK_MODE
 eq("WORK_MODE=off: no prompt line", pushed, false)
-console.log(bad ? `${bad} FAIL` : "work-mode: 26 checks OK")
+console.log(bad ? `${bad} FAIL` : "work-mode: 28 checks OK")

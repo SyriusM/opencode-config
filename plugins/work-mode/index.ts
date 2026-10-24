@@ -51,7 +51,7 @@ export const NUDGE =
 
 export function modeLine(mode: "auto" | "step"): string {
   return mode === "auto"
-    ? "WORK MODE: auto — nobody is watching and nobody will answer questions. When there are options, take your recommended one, say which and why, and finish the task. Don't stop to wait for a choice."
+    ? "WORK MODE: auto — nobody is watching and nobody will answer questions. When there are options, take your recommended one, say which and why, and finish the task. Don't stop to wait for a choice. A big task (many fixes, several files) still goes one part per session: finish that part, verify, report and list the rest as follow-ups — that counts as finished, not as waiting."
     : "WORK MODE: step — a person is chatting with you. When there are different paths forward, give the options and wait for the choice."
 }
 
