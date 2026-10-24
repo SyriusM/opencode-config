@@ -99,7 +99,8 @@ Do tego usługa w tle (`opencode serve --service`) trzyma konfigurację z chwili
 
 Co robi:
 
-- **przy pierwszym starcie** odpala konfigurator. Ten wykrywa lokalny serwer (llama.cpp :8080, Ollama :11434, LM Studio :1234, vLLM :8000) i zapisuje bezpieczny `opencode.json`. Do istniejącego pliku proponuje dopisać `enabled_providers` i `small_model`, z kopią zapasową. Ponowne uruchomienie: `freecode --configure`;
+- **przy pierwszym starcie** odpala konfigurator. Ten wykrywa lokalny serwer (llama.cpp :8080, Ollama :11434, LM Studio :1234, vLLM :8000) i zapisuje bezpieczny `opencode.json`. Do istniejącego pliku proponuje dopisać `enabled_providers` i `small_model`, z kopią zapasową. Nowy plik dostaje też 4 agentów (general, coder, reasoner, reviewer) z promptami z `agents/` i rozmiar kontekstu odczytany z serwera. Ponowne uruchomienie: `freecode --configure`;
+- **opisuje komputer w `AGENTS.md`** (blok `ENV`: system, menedżer pakietów, GPU i VRAM, RAM, model i kontekst), odświeżany co dobę albo ręcznie `freecode --env` — model nie musi pytać o podstawy. Reszty pliku nie rusza; własnych `AGENTS.md` i promptów `install.sh` nie nadpisuje;
 - **przy każdym starcie** sprawdza wszystkie źródła konfiguracji: globalne, `$OPENCODE_CONFIG`, `$OPENCODE_CONFIG_CONTENT` i pliki projektu aż do korzenia repozytorium. Odmawia startu, jeśli JSON jest uszkodzony albo którykolwiek model czy dostawca nie jest lokalny (localhost, 127.0.0.0/8, ::1, hosty z `FREECODE_HOSTS`);
 - uruchamia opencode z `--standalone`, czyli z własnym serwerem z właśnie sprawdzoną konfiguracją, oraz z `OPENCODE_DISABLE_AUTOUPDATE` i `OPENCODE_DISABLE_MODELS_FETCH`.
 

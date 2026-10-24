@@ -4,6 +4,7 @@
   freecode [argumenty opencode]   sprawdza konfigurację i uruchamia opencode (TUI albo `run`)
   freecode --configure           konfigurator (sam odpala się tylko raz, przy pierwszym starcie)
   freecode --check                tylko kontrola konfiguracji (kod 0 = można startować)
+  freecode --env                  odśwież opis komputera w AGENTS.md (system, GPU, model)
   freecode --version              wersja freecode i opencode pod spodem
 
 freecode to NAKŁADKA na niezmieniony opencode, nie fork: opencode aktualizuje się normalnie
@@ -27,6 +28,7 @@ import ipaddress
 import json
 import os
 import shutil
+import subprocess
 import sys
 import time
 import urllib.parse
@@ -233,6 +235,96 @@ def mark_configured():
         f.write(time.strftime("%Y-%m-%d %H:%M:%S\n"))
 
 
+ENV_START, ENV_END = "<!-- ENV:START -->", "<!-- ENV:END -->"
+AGENTS_FILE = os.path.join(OC_DIR, "AGENTS.md")
+AGENT_PROMPTS = {  # agent → (tryb, czy wolno edytować); prompt = prompts/<agent>.txt, jeśli istnieje
+    "general": ("primary", True), "coder": ("primary", True),
+    "reasoner": ("primary", False), "reviewer": ("subagent", False),
+}
+
+
+def run_out(cmd):
+    try:
+        return subprocess.run(cmd, capture_output=True, text=True, timeout=10).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return ""
+
+
+def server_ctx(url):
+    """Rozmiar kontekstu z /props llama.cpp; None dla innych serwerów."""
+    base = url.rstrip("/").removesuffix("/v1")
+    try:
+        with urllib.request.urlopen(base + "/props", timeout=5) as r:
+            return int(json.load(r)["default_generation_settings"]["n_ctx"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+def current_server():
+    """(baseURL, model) z obecnego configu: model → dostawca → options.baseURL."""
+    f = next((os.path.join(OC_DIR, n) for n in CONFIG_NAMES if os.path.isfile(os.path.join(OC_DIR, n))), None)
+    try:
+        c = jsonc(open(f, encoding="utf-8").read()) if f else {}
+    except ValueError:
+        return None, None
+    pid, _, model = (c.get("model") or "").partition("/")
+    url = (((c.get("provider") or {}).get(pid) or {}).get("options") or {}).get("baseURL")
+    return url, model or None
+
+
+def env_facts(url, model):
+    """Fakty o tym komputerze dla modelu — żeby nie pytał i nie zgadywał."""
+    osr = {}
+    try:
+        for line in open("/etc/os-release", encoding="utf-8"):
+            k, _, v = line.strip().partition("=")
+            osr[k] = v.strip('"')
+    except OSError:
+        pass
+    pkg = next((m for m in ("pacman", "apt", "dnf", "zypper", "apk", "brew") if shutil.which(m)), "?")
+    cpu = next((l.split(":", 1)[1].strip() for l in open("/proc/cpuinfo") if l.startswith("model name")), "?") \
+        if os.path.exists("/proc/cpuinfo") else "?"
+    ram = next((int(l.split()[1]) // 1048576 for l in open("/proc/meminfo") if l.startswith("MemTotal")), 0) \
+        if os.path.exists("/proc/meminfo") else 0
+    gpu = run_out(["nvidia-smi", "--query-gpu=name,memory.total", "--format=csv,noheader"]) if shutil.which("nvidia-smi") else ""
+    if not gpu and shutil.which("lspci"):
+        gpu = "; ".join(l.split(": ", 1)[-1] for l in run_out(["lspci"]).splitlines()
+                        if any(k in l for k in ("VGA", "3D controller", "Display controller")))
+    desktop = " ".join(x for x in (os.environ.get("XDG_CURRENT_DESKTOP"), os.environ.get("XDG_SESSION_TYPE")) if x)
+    ctx = server_ctx(url) if url else None
+    lines = [
+        f"- OS: {osr.get('PRETTY_NAME') or os.uname().sysname} ({os.uname().release}), packages: `{pkg}`" +
+        (" — never apt" if pkg == "pacman" else ""),
+        f"- User shell: `{os.path.basename(os.environ.get('SHELL') or '?')}` (tool commands: simple POSIX, one per call), home `{HOME}`",
+        f"- Desktop: {desktop or 'none / unknown'}",
+        f"- CPU: {cpu}, {os.cpu_count()} threads; RAM {ram} GB",
+        f"- GPU: {gpu or 'none detected'}",
+        f"- Model: `{model or '?'}` at {url or '?'}" + (f", context {ctx} tokens — keep reads short" if ctx else ""),
+        "- Model runs locally: heavy GPU/RAM jobs (games, training, other models) slow it down or kill it.",
+    ]
+    return "## Environment (auto: `freecode --env`, " + time.strftime("%Y-%m-%d") + ")\n" + "\n".join(lines)
+
+
+def write_env(url=None, model=None):
+    """Wpisuje/odświeża blok ENV w AGENTS.md; reszty pliku nie rusza."""
+    if not url:
+        url, model = current_server()
+    block = f"{ENV_START}\n{env_facts(url, model)}\n{ENV_END}"
+    try:
+        text = open(AGENTS_FILE, encoding="utf-8").read()
+    except OSError:
+        text = ""
+    if ENV_START in text and ENV_END in text:
+        head, rest = text.split(ENV_START, 1)
+        text = head + block + rest.split(ENV_END, 1)[1]
+    else:
+        text = (text.rstrip("\n") + "\n\n" if text else "") + block + "\n"
+    os.makedirs(OC_DIR, exist_ok=True)
+    with open(AGENTS_FILE, "w", encoding="utf-8") as f:
+        f.write(text)
+    info(color(32, f"  środowisko wpisane do {AGENTS_FILE}"))
+
+
 def configure():
     info("freecode — konfiguracja (jednorazowa; ponownie: freecode --configure)")
     global_file = next((os.path.join(OC_DIR, n) for n in CONFIG_NAMES if os.path.isfile(os.path.join(OC_DIR, n))), None)
@@ -240,7 +332,7 @@ def configure():
     if global_file:
         problems, _, _ = check(HOME)
         if not problems:
-            info(color(32, f"  {global_file}: wszyscy dostawcy lokalni, nic do zmiany")); mark_configured(); return 0
+            info(color(32, f"  {global_file}: wszyscy dostawcy lokalni, nic do zmiany")); write_env(); mark_configured(); return 0
         try:
             c = jsonc(open(global_file, encoding="utf-8").read())
         except ValueError as e:
@@ -265,7 +357,7 @@ def configure():
             info(color(33, f"  ! {p}"))
         if problems:
             info("  Popraw powyższe ręcznie i uruchom: freecode --check"); return 1
-        mark_configured(); return 0
+        write_env(); mark_configured(); return 0
 
     # brak konfiguracji — wykrycie lokalnego serwera
     url, model = os.environ.get("FREECODE_URL"), os.environ.get("FREECODE_MODEL")
@@ -292,15 +384,33 @@ def configure():
             model = tty_input("Serwer nie podał listy modeli. Nazwa modelu", "")
     if not model:
         info(color(31, "  nie wybrano modelu")); return 1
-    save(os.path.join(OC_DIR, "opencode.json"), {
+    entry = {"name": f"{model} (lokalnie)"}
+    ctx = server_ctx(url)
+    if ctx:
+        entry["limit"] = {"context": ctx, "output": min(8192, ctx // 4)}
+    cfg = {
         "$schema": "https://opencode.ai/config.json",
         "enabled_providers": ["local"],
         "model": f"local/{model}",
         "small_model": f"local/{model}",
         "share": "disabled",
         "provider": {"local": {"npm": "@ai-sdk/openai-compatible", "options": {"baseURL": url},
-                               "models": {model: {"name": f"{model} (lokalnie)"}}}},
-    })
+                               "models": {model: entry}}},
+    }
+    repo_agents = os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "agents")
+    for f in ["AGENTS.md"] + [f"prompts/{a}.txt" for a in AGENT_PROMPTS]:  # z repo (bootstrap), gdy brak własnych
+        src, dst = os.path.join(repo_agents, f), os.path.join(OC_DIR, f)
+        if os.path.isfile(src) and not os.path.exists(dst):
+            os.makedirs(os.path.dirname(dst), exist_ok=True); shutil.copy2(src, dst)
+    agents = {a: {"mode": mode, "prompt": f"{{file:./prompts/{a}.txt}}",
+                  **({} if edit else {"permission": {"edit": "deny"}})}
+              for a, (mode, edit) in AGENT_PROMPTS.items() if os.path.isfile(os.path.join(OC_DIR, "prompts", f"{a}.txt"))}
+    if agents:
+        cfg["agent"] = agents
+        if "general" in agents:
+            cfg["default_agent"] = "general"
+    save(os.path.join(OC_DIR, "opencode.json"), cfg)
+    write_env(url, model)
     problems, _, _ = check(HOME)
     for p in problems:
         info(color(33, f"  ! {p}"))
@@ -367,7 +477,6 @@ def service_mode(oc, directory):
     if busy:
         return "usługa ma nieaktualną konfigurację (" + "; ".join(reasons) + ") i liczy sesję — nie przerywam jej"
     info(color(2, "freecode: restart usługi w tle (" + "; ".join(reasons) + ")"))
-    import subprocess
     r = subprocess.run([oc, "service", "restart"], capture_output=True, text=True, timeout=60)
     if r.returncode != 0:
         return "restart usługi nie powiódł się: " + (r.stderr.strip() or r.stdout.strip())[:200]
@@ -407,6 +516,8 @@ def main(argv):
         print(describe(os.environ.get("FREECODE_OPENCODE") or shutil.which("opencode"))); return 0
     # old Polish flags stay as aliases
     argv = [{"--konfiguruj": "--configure", "--sprawdz": "--check"}.get(a, a) for a in argv[:1]] + argv[1:]
+    if argv[:1] == ["--env"]:
+        write_env(); return 0
     if argv[:1] == ["--configure"]:
         return configure()
     if not os.path.exists(MARKER) and not os.path.exists(OLD_MARKER) and argv[:1] != ["--check"]:
@@ -425,6 +536,11 @@ def main(argv):
             info(f"  - {p}")
         info("Popraw konfigurację albo uruchom: freecode --configure")
         return 1
+    if os.path.isfile(AGENTS_FILE) and time.time() - os.path.getmtime(AGENTS_FILE) > 86400:
+        try:
+            write_env()  # opis komputera świeży co najwyżej o dobę (zmiana karty, modelu, kontekstu)
+        except OSError:
+            pass
     if argv[:1] == ["--check"]:
         info(color(32, "freecode: konfiguracja lokalna")); return 0
 
