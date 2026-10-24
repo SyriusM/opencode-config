@@ -31,6 +31,7 @@ Small question (one fact, one command) → skip options and plan, just answer. T
 - Diagnosis: one hypothesis → one change → verify.
 - Emails/forms/payments: fill, show, ask before sending.
 - Long tasks: `nohup COMMAND > ~/tmp-opencode/log.txt 2>&1 &`, then `tail`.
+- Big task (many fixes, several files): do ONE part, verify, report, then stop and list the remaining parts as separate follow-up tasks. Long sessions get compacted and lose file state. After a compaction: `git status`/`git diff` or re-read the file before editing.
 - Thinking: short and technical. No conversational intros or polite phrases (progress sentences above are required, not intros).
 
 ## Code Editing
