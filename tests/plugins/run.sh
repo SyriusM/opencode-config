@@ -40,7 +40,7 @@ run() {
 }
 
 run cases "${NODE[@]}" "$HERE/cases.test.mjs" "$WORK/tool-input-fix.ts" "$HERE/cases.json"
-for t in hint-text loop-escalation nochanges-stop nonblockable-deliver read-first-hint; do
+for t in hint-text loop-escalation nochanges-stop nonblockable-deliver read-first-hint shell-syntax-note; do
   run "$t" "${NODE[@]}" "$HERE/$t.test.mjs" "$WORK/tool-input-fix.ts"
 done
 run no-call-guard "${NODE[@]}" "$HERE/no-call-guard.test.mjs" "$WORK/no-call-guard.ts"

@@ -472,6 +472,17 @@ const MISSING_FILE = /No such file or directory|Nie ma takiego pliku/i
 export function isMissingTarget(cmd: string, msg: string): boolean {
   return MUTATING_CMD.test(cmd) && MISSING_FILE.test(msg)
 }
+// Błąd składni basha (niedomknięty cudzysłów, pętla bez done) = komenda w ogóle nie ruszyła.
+// 10-24 Bonsai 5× na długich jednolinijkowcach z zagnieżdżonymi cudzysłowami i heredokami.
+const SHELL_SYNTAX = /nieoczekiwany EOF podczas poszukiwania pasującego|niespodziewany koniec pliku|unexpected EOF while looking for matching|syntax error: unexpected end of file/i
+export function isShellSyntaxError(tool: string, msg: string): boolean {
+  return (tool === "shell" || tool === "bash") && SHELL_SYNTAX.test(msg)
+}
+const SHELL_SYNTAX_NOTE =
+  "WSKAZÓWKA: błąd składni powłoki (niedomknięty cudzysłów albo pętla) — komenda NIE została wykonana, nic się nie zmieniło. " +
+  "Nie poprawiaj cudzysłowów w tej samej długiej linii. Zapisz komendy narzędziem write do ~/tmp-opencode/NAZWA.sh " +
+  "(jedna komenda na linię, kod Pythona do osobnego pliku .py) i uruchom: bash ~/tmp-opencode/NAZWA.sh"
+
 const MISSING_TARGET_NOTE =
   "WSKAZÓWKA: pliku albo katalogu z tej komendy NIE MA. Przy usuwaniu, przenoszeniu i zmianie plików NIE szukaj zamiennika " +
   "(ten sam plik w innym katalogu, podobna nazwa) i nie wykonuj tej operacji na innym pliku niż wskazany przez użytkownika. " +
@@ -991,6 +1002,14 @@ export default {
             reminded.add(k)
             appendToError(ev, "\n\n" + MISSING_TARGET_NOTE)
             log(`HINT-missing-target ${tool} session=${ev.sessionID}`)
+          }
+        }
+        if (isShellSyntaxError(tool, msg)) {
+          const k = String(ev.sessionID) + "\u0000" + "shell-syntax"
+          if (!reminded.has(k)) {
+            reminded.add(k)
+            appendToError(ev, "\n\n" + SHELL_SYNTAX_NOTE)
+            log(`HINT-shell-syntax session=${ev.sessionID}`)
           }
         }
         // znane rozwiązanie z kopalni — doklejone do błędu, raz na sesję dla danego wniosku
