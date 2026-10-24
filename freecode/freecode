@@ -471,6 +471,11 @@ def service_mode(oc, directory):
         reasons.append("nie da się odczytać środowiska usługi")
     reasons += [f"{p} zmieniony po starcie usługi" for p, content in sources(directory)
                 if content is None and os.path.getmtime(p) > started]
+    prompts_dir = os.path.join(OC_DIR, "prompts")   # reguły i prompty usługa też czyta tylko przy starcie
+    rules = [AGENTS_FILE] + ([os.path.join(prompts_dir, f) for f in os.listdir(prompts_dir)]
+                             if os.path.isdir(prompts_dir) else [])
+    reasons += [f"{p} zmieniony po starcie usługi" for p in rules
+                if os.path.isfile(p) and os.path.getmtime(p) > started]
     if not reasons:
         return None
     try:
