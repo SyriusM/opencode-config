@@ -100,7 +100,14 @@ Do tego usługa w tle (`opencode serve --service`) trzyma konfigurację z chwili
 Co robi:
 
 - **przy pierwszym starcie** odpala konfigurator. Ten wykrywa lokalny serwer (llama.cpp :8080, Ollama :11434, LM Studio :1234, vLLM :8000) i zapisuje bezpieczny `opencode.json`. Do istniejącego pliku proponuje dopisać `enabled_providers` i `small_model`, z kopią zapasową. Nowy plik dostaje też 4 agentów (general, coder, reasoner, reviewer) z promptami z `agents/` i rozmiar kontekstu odczytany z serwera. Ponowne uruchomienie: `freecode --configure`;
-- **`freecode --optimize`** porównuje konfigurację ze wzorcem z `agents/` (kontekst modelu względem serwera, `small_model`, brakujący agenci, brakujące sekcje `AGENTS.md`) i każdą poprawkę proponuje z pytaniem t/n. Potem pyta o styl pracy modelu (a/b/c: opcje przed zadaniem, opis kroków, swoboda zmian, język) i zapisuje wybór w bloku `PREFS` w `AGENTS.md`. Bootstrap odpala go na koniec;
+- **`freecode --configure`** działa w 4 osobnych etapach, każda zmiana z pytaniem:
+  1. połączenie z lokalnym modelem (`opencode.json`);
+  2. zgodność ze wzorcem z `agents/` (kontekst modelu względem serwera, `small_model`, brakujący agenci, brakujące sekcje `AGENTS.md`);
+  3. styl pracy modelu (a/b/c: opcje przed zadaniem, opis kroków, swoboda zmian, język), zapisywany w bloku `PREFS` w `AGENTS.md`;
+  4. opis komputera (blok `ENV`).
+  `--configure 3` uruchamia tylko wybrany etap. Bootstrap robi etap 1 przed instalacją, a 2–4 po niej. Stara nazwa `--optimize` działa dalej;
+- **`freecode --set narration=b`** zmienia styl pracy bez pytań. Model używa tego po złej ocenie pracy, ale tylko po Twojej zgodzie. **`freecode --undo`** cofa ostatnią zmianę (historia w `~/.local/share/freecode/prefs-history.jsonl`);
+- **tryb pracy** (wtyczka `work-mode`): w `opencode run` / `--auto` nikt nie odpowie, więc model sam bierze rekomendowaną opcję i mówi, którą; w TUI podaje opcje i czeka. Wymuszenie: `FREECODE_MODE=auto|step`;
 - **opisuje komputer w `AGENTS.md`** (blok `ENV`: system, menedżer pakietów, GPU i VRAM, RAM, model i kontekst), odświeżany co dobę albo ręcznie `freecode --env` — model nie musi pytać o podstawy. Reszty pliku nie rusza; własnych `AGENTS.md` i promptów `install.sh` nie nadpisuje;
 - **przy każdym starcie** sprawdza wszystkie źródła konfiguracji: globalne, `$OPENCODE_CONFIG`, `$OPENCODE_CONFIG_CONTENT` i pliki projektu aż do korzenia repozytorium. Odmawia startu, jeśli JSON jest uszkodzony albo którykolwiek model czy dostawca nie jest lokalny (localhost, 127.0.0.0/8, ::1, hosty z `FREECODE_HOSTS`);
 - uruchamia opencode z `--standalone`, czyli z własnym serwerem z właśnie sprawdzoną konfiguracją, oraz z `OPENCODE_DISABLE_AUTOUPDATE` i `OPENCODE_DISABLE_MODELS_FETCH`.

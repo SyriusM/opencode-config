@@ -72,7 +72,7 @@ fi
 autotest() {
   local errors=0 py
   echo "Autotest"
-  for n in tool-input-fix lesson-draft palace-context error-hook auto-backup no-call-guard danger-guard site-lint-hook; do
+  for n in tool-input-fix lesson-draft palace-context error-hook auto-backup no-call-guard danger-guard site-lint-hook work-mode; do
     if [ -f "$PLUGINS/$n/index.ts" ]; then ok "wtyczka $n"; else fail "brak wtyczki $n"; errors=$((errors+1)); fi
   done
   for f in palace-context audit-retention lesson-note agent-rule backup-copy freecode-tune site-lint; do
@@ -88,7 +88,7 @@ autotest() {
   if out="$(timeout 120 "$BIN/lesson-note" 2>&1)"; then ok "lesson-note: $(echo "$out" | tail -1)"
   else fail "lesson-note padł: $(echo "$out" | tail -2)"; errors=$((errors+1)); fi
   if command -v node >/dev/null && command -v npx >/dev/null; then
-    for n in tool-input-fix lesson-draft palace-context error-hook auto-backup no-call-guard danger-guard site-lint-hook; do
+    for n in tool-input-fix lesson-draft palace-context error-hook auto-backup no-call-guard danger-guard site-lint-hook work-mode; do
       if npx -y esbuild "$PLUGINS/$n/index.ts" --log-level=error --outfile=/dev/null >/dev/null 2>&1; then ok "składnia $n"
       else fail "błąd składni $n"; errors=$((errors+1)); fi
     done
@@ -226,10 +226,10 @@ for f in AGENTS.md prompts/general.txt prompts/coder.txt prompts/reasoner.txt pr
   if [ -f "$CFG/opencode/$f" ]; then ok "$f — zostaje twój"; else install_file "$REPO/agents/$f" "$CFG/opencode/$f" 644; ok "$f"; fi
 done
 for f in AGENTS.md prompts/general.txt prompts/coder.txt prompts/reasoner.txt prompts/reviewer.txt; do
-  # wzorce dla `freecode --optimize` (porównanie z twoimi plikami); to kopie z repo, nie twoje pliki
+  # wzorce dla `freecode --configure` (etap 2) (porównanie z twoimi plikami); to kopie z repo, nie twoje pliki
   install_file "$REPO/agents/$f" "${XDG_DATA_HOME:-$HOME/.local/share}/freecode/agents/$f" 644
 done
-ok "wzorce agents/ dla freecode --optimize"
+ok "wzorce agents/ dla freecode --configure"
 install_file "$REPO/freecode/freecode" "$BIN/freecode" 755; ok "~/bin/freecode (opencode tylko na lokalnych modelach)"
 mkdir -p "$HOME/oc-audyt/kopalnia" "$HOME/oc-audyt/auto-kopie" "$HOME/tmp-opencode" "$HOME/mempalace/audit"
 if [ -z "$(ls -A "$HOME/oc-audyt/kopalnia" 2>/dev/null)" ]; then

@@ -462,15 +462,15 @@ fi
 ok "repo $REPO ($(git -C "$REPO" log -1 --format='%h %cs' 2>/dev/null || echo 'bez gita'))"
 
 # freecode PRZED install.sh: zapisuje opencode.json z wybranym modelem; install.sh istniejącego pliku nie rusza
-FREECODE_YES=1 FREECODE_URL="$URL" FREECODE_MODEL="$MODEL" python3 "$REPO/freecode/freecode" --configure ||
+FREECODE_YES=1 FREECODE_URL="$URL" FREECODE_MODEL="$MODEL" python3 "$REPO/freecode/freecode" --configure 1 ||
   fail "konfiguracja freecode nie przeszła — popraw ~/.config/opencode/opencode.json wg komunikatów wyżej i uruchom ponownie"
 
 installer=("$REPO/install.sh"); [ "$YES" = 1 ] && installer+=(-y)
 "${installer[@]}" </dev/null || fail "install.sh zakończył się błędem"
 
-# styl pracy modelu + porównanie ze wzorcem (pyta przez /dev/tty; przy -y domyślne odpowiedzi)
-if [ "$YES" = 1 ]; then FREECODE_YES=1 "$BIN/freecode" --optimize; else "$BIN/freecode" --optimize; fi ||
-  warn "freecode --optimize nie przeszedł — uruchom ponownie później"
+# etapy 2–4: wzorzec, styl pracy modelu, opis komputera (pyta przez /dev/tty; przy -y domyślne odpowiedzi)
+if [ "$YES" = 1 ]; then FREECODE_YES=1 "$BIN/freecode" --configure 234; else "$BIN/freecode" --configure 234; fi ||
+  warn "freecode --configure 234 nie przeszedł — uruchom ponownie później"
 
 # ── 6. kontrola ──────────────────────────────────────────────────────────────────────────────
 echo "[bootstrap 6/6] Kontrola"

@@ -25,6 +25,7 @@ cp "$PLUGINS/tool-input-fix/index.ts" "$WORK/tool-input-fix.ts"
 cp "$PLUGINS/no-call-guard/index.ts" "$WORK/no-call-guard.ts"
 cp "$PLUGINS/power-cost/tariff.ts" "$WORK/power-cost-tariff.ts"
 cp "$PLUGINS/danger-guard/index.ts" "$WORK/danger-guard.ts"
+cp "$PLUGINS/work-mode/index.ts" "$WORK/work-mode.ts"
 
 run() {
   local name=$1 out
@@ -46,5 +47,6 @@ run no-call-guard "${NODE[@]}" "$HERE/no-call-guard.test.mjs" "$WORK/no-call-gua
 run no-call-guard-act env NO_CALL_GUARD=act "${NODE[@]}" "$HERE/no-call-guard.test.mjs" "$WORK/no-call-guard.ts"
 run power-cost-tariff "${NODE[@]}" "$HERE/power-cost-tariff.test.mjs" "$WORK/power-cost-tariff.ts"
 run danger-guard "${NODE[@]}" "$HERE/danger-guard.test.mjs" "$WORK/danger-guard.ts"
+run work-mode "${NODE[@]}" "$HERE/work-mode.test.mjs" "$WORK/work-mode.ts"
 run freecode-tune python3 "$HERE/../freecode-tune.test.py"
 exit $fail
