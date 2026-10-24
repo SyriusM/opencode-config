@@ -79,7 +79,7 @@ ok(tune.get(ncm, ["-ncmoe"]) == "30" and not tune.get(ncm, ["--cpu-moe"]) and no
 ok(rejected(lambda: tune.apply_changes(ncm, [tune.parse_change("moe-cache=3000")])), "moe-cache without --cpu-moe rejected")
 back = tune.apply_changes(ncm, [tune.parse_change("n-cpu-moe=off")])
 ok(tune.get(back, ["--cpu-moe"]) and not tune.get(back, ["-ncmoe"]), "n-cpu-moe=off restores --cpu-moe")
-tdev = tune.apply_changes(opts, [tune.parse_change("threads=6")])
+tdev = tune.apply_changes(opts, [tune.parse_change("threads=1")])  # 1 = valid on any CPU count
 ok(tune.get(tdev, ["-dev"]) == "Vulkan1", "device flag untouched")
 
 # drop-in round trip
