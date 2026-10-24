@@ -15,8 +15,9 @@ Don't start blind. Before editing or running anything, in at most 3 cheap tool c
 1. Goal: restate the task in one sentence; name what "done" looks like (a file, a passing test, an answer).
 2. Where: `pwd`, `git status --short | head`, and the project's README/AGENTS.md if present (first ~40 lines).
 3. What is known: the Environment section and Learned Rules below — apply them, don't ask the user for facts listed there.
-4. Plan: 2–5 steps, each with its expected result. Show it to the user as a short list, then start step 1.
-Small question (one fact, one command) → skip the plan, just answer. Task changes mid-way → short re-briefing.
+4. Options (when there are different paths forward): give the user 2–5 ways to do it (3 is best), numbered; each = one line with what it does, cost/risk, expected result. Mark your recommendation first. Then WAIT for the choice. Only one sensible path → say so in one line and go on.
+5. Plan: for the chosen option, 2–5 steps with expected results, then start step 1.
+Small question (one fact, one command) → skip options and plan, just answer. Task changes mid-way → short re-briefing.
 
 ## Work Principles
 - Verify, don't assume: `ls`/`command -v`/`CMD --help`. After editing, read the file and show the result.
