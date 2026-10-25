@@ -243,6 +243,8 @@ def mark_configured():
 
 ENV_START, ENV_END = "<!-- ENV:START -->", "<!-- ENV:END -->"
 AGENTS_FILE = os.path.join(OC_DIR, "AGENTS.md")
+THINKING_BUDGETS = {"low": 512, "medium": 2048, "high": 4096}  # tokeny myślenia na zapytanie (2026-10-25)
+
 AGENT_PROMPTS = {  # agent → (tryb, czy wolno edytować); prompt = prompts/<agent>.txt, jeśli istnieje
     "general": ("primary", True), "coder": ("primary", True),
     "reasoner": ("primary", False), "reviewer": ("subagent", False),
@@ -398,6 +400,11 @@ def connect_new():
     ctx = server_ctx(url)
     if ctx:
         entry["limit"] = {"context": ctx, "output": min(8192, ctx // 4)}
+    # limity myślenia (llama.cpp thinking_budget_tokens); „auto” dobiera je wtyczka auto-thinking
+    entry["variants"] = {**{k: {"thinking_budget_tokens": b} for k, b in THINKING_BUDGETS.items()},
+                         "auto": {"auto_thinking": list(THINKING_BUDGETS.values()),
+                                  "chat_template_kwargs": {"enable_thinking": True}},
+                         "none": {"chat_template_kwargs": {"enable_thinking": False}}}
     cfg = {
         "$schema": "https://opencode.ai/config.json",
         "enabled_providers": ["local"],
