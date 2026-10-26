@@ -10,10 +10,12 @@ Checks every *.html in DIR (or only the given files):
   ERROR  unbalanced tags, invalid JSON-LD, id used in JS (getElementById/querySelector '#x') missing in HTML
   ERROR  no <meta http-equiv="Content-Security-Policy">, or CSP with unsafe-inline/unsafe-eval
   ERROR  CSS with a :root palette (--vars) but colour literals outside :root (use var(--...))
+  ERROR  local SVG shown via <img>/<object> uses var(--x) it does not define (page CSS does not reach it)
   WARN   inline <style>/style=/<script>/on* attributes, missing lang/viewport/<title>
 Exit 0 = no ERROR, 1 = errors found, 2 = usage.
 Written 2026-10-23 after training task 20: Gemma left 4-13 classes without CSS and never checked.
 2026-10-26: CSP and palette checks added after 35B failed tasks 20 (no CSP) and 23 (colours outside :root).
+2026-10-26: SVG var() check added after 35B task 23: logo.svg with var(--kolor2) in <img> = 0 palette colours.
 """
 import glob, json, os, re, sys
 from html.parser import HTMLParser
@@ -152,8 +154,21 @@ def main():
                         if lit:
                             errors.append(f"{os.path.relpath(cp, root)}: {len(lit)} colour literal(s) outside :root, "
                                           f"use the palette via var(--...): {lit[:3]}")
+        # SVG loaded as an image is a separate document: page CSS variables do not apply inside it
+        for t, a, _, ln in d.tags:
+            src = a.get("src") if t == "img" else a.get("data") if t == "object" else None
+            if src and local(src) and re.sub(r"[?#].*", "", src).lower().endswith(".svg"):
+                sp = os.path.normpath(os.path.join(base, re.sub(r"[?#].*", "", src)))
+                svg = read(sp)
+                if svg is not None and sp not in css_checked:
+                    css_checked.add(sp)
+                    svg = strip_comments(svg, "css")
+                    undef = sorted(set(re.findall(r"var\(\s*(--[\w-]+)", svg)) - set(re.findall(r"(--[\w-]+)\s*:", svg)))
+                    if undef:
+                        errors.append(f"{os.path.relpath(sp, root)}: uses {', '.join(undef[:3])} but is loaded via <{t}>, "
+                                      f"where page CSS variables do not apply - write the palette colours (#hex) into the SVG")
         if d.style_tag:
-            css += " ".join(re.findall(r"<style\b[^>]*>(.*?)</style>", txt, re.S | re.I))
+            css +=" ".join(re.findall(r"<style\b[^>]*>(.*?)</style>", txt, re.S | re.I))
         # external stylesheet (CDN: Bootstrap, Tailwind...) = classes may live there, so only WARN
         ext_css = any(t == "link" and "stylesheet" in a.get("rel", "").lower() and a.get("href", "").strip()
                       and not local(a.get("href", "")) for t, a, _, _ in d.tags)
