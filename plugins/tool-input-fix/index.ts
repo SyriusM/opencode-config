@@ -519,7 +519,7 @@ const HINTS_SHELL: Hint[] = [
 // (?:e|a)? + granica (?![A-Za-z]): Projekt/Pobran/Pobrane/Pobrania, ale nie ProjektX.
 const SUSPECT_HOME = /^(~|\/home\/[A-Za-z0-9_-]+)\/(Projekt|Projekti|Pojekty|Pulpit|Downloads|Desktop|Pobran)(?:e|a)?(?![A-Za-z])/i
 
-// TRYB NAPRAWCZY (sesja, w której model wczytał skill `autodiag` albo używa lesson-note / agent-rule / testu wtyczki):
+// TRYB NAPRAWCZY (sesja, w której model wczytał skill `self-repair` (dawniej `autodiag`) albo używa lesson-note / agent-rule / testu wtyczki):
 // osobista pamięć użytkownika (serwer MCP `mempalace` = ~/.mempalace) jest wtedy TYLKO DO ODCZYTU. Wnioski z napraw idą
 // do osobnego pałacu przez ~/bin/lesson-note. Poza trybem naprawczym model ma pełny dostęp jak dotąd.
 // Te wskazówki nie mają limitu powtórzeń — to blokada, nie podpowiedź.
@@ -536,7 +536,7 @@ const HINTS_REPAIR_SHELL: Hint[] = [
 function enablesRepair(tool: string, input: any): boolean {
   try {
     if (!input || typeof input !== "object") return false
-    if (tool === "skill") return /^autodiag$/i.test(String(input.id ?? input.name ?? input.skill ?? ""))
+    if (tool === "skill") return /^(self-repair|autodiag)$/i.test(String(input.id ?? input.name ?? input.skill ?? ""))
     if (/^(shell|bash|fish)$/.test(tool) && typeof input.command === "string")
       return /\b(oc-wniosek|lesson-note|oc-regula|agent-rule|test-wtyczki\.sh|test-plugin\.sh|powtorka-historii\.sh|history-replay\.sh)\b/.test(input.command)
   } catch {}

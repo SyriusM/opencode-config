@@ -3,8 +3,8 @@ import { homedir } from "node:os"
 import { join } from "node:path"
 
 // AUTO-KOPIE — siatka bezpieczeństwa: przed każdą zmianą pliku konfiguracji opencode, skilla, usługi albo skryptu
-// zapisuje jego poprzednią wersję. Osobna wtyczka CELOWO: nie zależy od tool-input-fix (którą /autodiag edytuje),
-// więc działa także wtedy, gdy tamta jest zepsuta. TEJ WTYCZKI NIE EDYTUJE SIĘ podczas /autodiag — strażnik
+// zapisuje jego poprzednią wersję. Osobna wtyczka CELOWO: nie zależy od tool-input-fix (którą /self-repair edytuje),
+// więc działa także wtedy, gdy tamta jest zepsuta. TEJ WTYCZKI NIE EDYTUJE SIĘ podczas /self-repair — strażnik
 // (~/oc-audyt/straznik-wtyczki.sh) pilnuje jej sumy kontrolnej i przywraca oryginał.
 // Hook V2: ctx.tool.hook("execute.before"). Nigdy nie blokuje narzędzia i nigdy nie rzuca.
 // Log: ~/.mempalace/hook_state/tool_input_fix.log (wpisy KOPIA). Cofanie: ~/bin/oc-kopie.

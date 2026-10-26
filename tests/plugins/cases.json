@@ -554,7 +554,16 @@
  },
  {
   "type": "enables-repair",
-  "desc": "skill autodiag włącza tryb",
+  "desc": "skill self-repair włącza tryb",
+  "tool": "skill",
+  "input": {
+   "id": "self-repair"
+  },
+  "expect": true
+ },
+ {
+  "type": "enables-repair",
+  "desc": "stara nazwa autodiag nadal włącza tryb",
   "tool": "skill",
   "input": {
    "id": "autodiag"
