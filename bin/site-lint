@@ -8,15 +8,36 @@ Checks every *.html in DIR (or only the given files):
   ERROR  <img> without alt, form field without <label>
   ERROR  target=_blank without rel="noopener noreferrer", http:// URL, javascript: URL
   ERROR  unbalanced tags, invalid JSON-LD, id used in JS (getElementById/querySelector '#x') missing in HTML
+  ERROR  no <meta http-equiv="Content-Security-Policy">, or CSP with unsafe-inline/unsafe-eval
+  ERROR  CSS with a :root palette (--vars) but colour literals outside :root (use var(--...))
   WARN   inline <style>/style=/<script>/on* attributes, missing lang/viewport/<title>
 Exit 0 = no ERROR, 1 = errors found, 2 = usage.
 Written 2026-10-23 after training task 20: Gemma left 4-13 classes without CSS and never checked.
+2026-10-26: CSP and palette checks added after 35B failed tasks 20 (no CSP) and 23 (colours outside :root).
 """
 import glob, json, os, re, sys
 from html.parser import HTMLParser
 
 VOID = {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "track", "wbr"}
 OPTIONAL_END = {"p", "li", "tr", "td", "th", "thead", "tbody", "tfoot", "option", "dt", "dd"}
+COLOUR_PROPS = r"(?:color|background(?:-color)?|border(?:-[a-z]+)*|outline(?:-color)?|fill|stroke|stop-color|flood-color|box-shadow|text-shadow|text-decoration(?:-color)?|caret-color|accent-color)"
+NAMED = set("""white black red green blue yellow orange purple pink brown gray grey silver gold navy teal maroon olive lime
+aqua fuchsia cyan magenta indigo violet beige ivory khaki crimson coral salmon tomato orchid plum tan lavender
+darkblue darkred darkgreen lightgray lightgrey darkgray darkgrey whitesmoke gainsboro midnightblue slategray""".split())
+
+
+def colour_literals(css):
+    """Colour literals outside :root, only when :root defines a palette of --variables."""
+    roots = re.findall(r":root\s*\{([^}]*)\}", css)
+    if not re.search(r"--[\w-]+\s*:\s*(?:#|rgb|hsl)", " ".join(roots), re.I):
+        return []
+    rest = re.sub(r":root\s*\{[^}]*\}", "", css)
+    out = []
+    for d in re.findall(r"(?<![\w-])" + COLOUR_PROPS + r"\s*:\s*([^;}]+)", rest, re.I):
+        if (re.search(r"#[0-9a-fA-F]{3,8}\b|\b(?:rgba?|hsla?|hwb|lab|lch|oklab|oklch|color)\s*\(", d, re.I)
+                or any(w.lower() in NAMED for w in re.findall(r"[a-zA-Z]+", re.sub(r"var\([^)]*\)", "", d)))):
+            out.append(d.strip())
+    return out
 
 
 class Page(HTMLParser):
@@ -111,6 +132,7 @@ def main():
         all_ids[f] = {a["id"] for _, a, _, _ in d.tags if a.get("id")}
 
     js_cache = {}
+    css_checked = set()
     for f, (txt, d) in pages.items():
         rel = os.path.relpath(f, root)
         base = os.path.dirname(f)
@@ -120,9 +142,16 @@ def main():
         css = ""
         for t, a, _, ln in d.tags:
             if t == "link" and "stylesheet" in a.get("rel", "").lower() and local(a.get("href", "")):
-                c = read(os.path.join(base, re.sub(r"[?#].*", "", a["href"])))
+                cp = os.path.normpath(os.path.join(base, re.sub(r"[?#].*", "", a["href"])))
+                c = read(cp)
                 if c is not None:
                     css += strip_comments(c, "css")
+                    if cp not in css_checked:
+                        css_checked.add(cp)
+                        lit = colour_literals(strip_comments(c, "css"))
+                        if lit:
+                            errors.append(f"{os.path.relpath(cp, root)}: {len(lit)} colour literal(s) outside :root, "
+                                          f"use the palette via var(--...): {lit[:3]}")
         if d.style_tag:
             css += " ".join(re.findall(r"<style\b[^>]*>(.*?)</style>", txt, re.S | re.I))
         # external stylesheet (CDN: Bootstrap, Tailwind...) = classes may live there, so only WARN
@@ -200,6 +229,15 @@ def main():
             W("-", "inline <style> block")
         if d.inline_script:
             W("-", "inline <script> (blocked by a strict CSP)")
+        csp = [a.get("content", "") for t, a, _, _ in d.tags
+               if t == "meta" and a.get("http-equiv", "").lower() == "content-security-policy"]
+        if not csp:
+            E("-", "no <meta http-equiv=\"Content-Security-Policy\"> in <head> (e.g. content=\"default-src 'self'\")")
+        for pol in csp:
+            if re.search(r"unsafe-inline|unsafe-eval", pol):
+                E("-", "CSP allows 'unsafe-inline'/'unsafe-eval' (move inline scripts/styles to files)")
+            elif not re.search(r"(default|script)-src", pol):
+                E("-", "CSP without default-src/script-src")
         htm = [a for t, a, _, _ in d.tags if t == "html"]
         if not (htm and htm[0].get("lang")):
             W("-", "no lang attribute on <html>")
