@@ -52,6 +52,7 @@ function cssMissing(dir: string, pages: string[]): boolean {
   return false
 }
 
+const lastCount = new Map<string, string>() // session+dir → last COUNT summary
 const last = new Map<string, string>() // session+dir → last error text (repeat = short note)
 
 export default {
@@ -81,24 +82,35 @@ export default {
         if (cssMissing(dir, pages)) { log(`SKIP css-missing ${dir}`); return }
         let out = ""
         try {
-          execFileSync(LINT, [dir], { encoding: "utf8", timeout: 10000 })
+          out = execFileSync(LINT, [dir], { encoding: "utf8", timeout: 10000 })
           last.delete(`${ev.sessionID}\u0000${dir}`)
-          return // exit 0 = clean
         } catch (e: any) {
           if (e?.status !== 1) { log(`lint failed ${dir}: ${String(e?.message ?? e).slice(0, 200)}`); return }
           out = String(e.stdout ?? "")
         }
-        const errs = out.split("\n").filter((l) => l.startsWith("ERROR "))
-        if (!errs.length) return
         const key = `${ev.sessionID}\u0000${dir}`
-        const body = errs.slice(0, MAX_LINES).join("\n") + (errs.length > MAX_LINES ? `\n… i ${errs.length - MAX_LINES} więcej` : "")
-        const text = last.get(key) === body
-          ? `\n\nsite-lint (automatycznie): te same ${errs.length} błędów nadal są — popraw je, zanim napiszesz, że gotowe.`
-          : `\n\nsite-lint ${dir} (automatycznie po zmianie pliku strony): ${errs.length} błędów. Popraw każdy, zanim napiszesz, że gotowe:\n${body}`
-        if (last.size > 200) last.clear()
-        last.set(key, body)
+        // 10-28: element counts (task 20: 2 <article> where 3 were asked) — shown only when they change, so a clean
+        // site doesn't get the same line after every edit
+        const counts = out.split("\n").filter((l) => l.startsWith("COUNT ")).map((l) => l.slice(6)).join("; ")
+        let countText = ""
+        if (counts && lastCount.get(key) !== counts) {
+          if (lastCount.size > 200) lastCount.clear()
+          lastCount.set(key, counts)
+          countText = `\n\nsite-lint: liczba elementów na stronach — ${counts}. Porównaj z tym, czego wymaga zadanie.`
+        }
+        const errs = out.split("\n").filter((l) => l.startsWith("ERROR "))
+        let text = countText
+        if (errs.length) {
+          const body = errs.slice(0, MAX_LINES).join("\n") + (errs.length > MAX_LINES ? `\n… i ${errs.length - MAX_LINES} więcej` : "")
+          text = (last.get(key) === body
+            ? `\n\nsite-lint (automatycznie): te same ${errs.length} błędów nadal są — popraw je, zanim napiszesz, że gotowe.`
+            : `\n\nsite-lint ${dir} (automatycznie po zmianie pliku strony): ${errs.length} błędów. Popraw każdy, zanim napiszesz, że gotowe:\n${body}`) + countText
+          if (last.size > 200) last.clear()
+          last.set(key, body)
+        }
+        if (!text) return
         const targets = append(ev, text)
-        log(`LINT ${errs.length} ${dir} ses=${ev.sessionID ?? "?"} → ${targets.join(",") || "NO TARGET"}`)
+        log(`LINT ${errs.length}${countText ? "+count" : ""} ${dir} ses=${ev.sessionID ?? "?"} → ${targets.join(",") || "NO TARGET"}`)
       } catch (e) {
         log(`site-lint-hook failed: ${e}`)
       }

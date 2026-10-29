@@ -1,4 +1,4 @@
-import { appendFileSync, mkdirSync } from "node:fs"
+import { appendFileSync, existsSync, mkdirSync } from "node:fs"
 import { homedir } from "node:os"
 import { join } from "node:path"
 
@@ -40,8 +40,58 @@ export function isEmptyTurn(stepText: string, calls: number, finish: unknown): b
   return calls > 0 && finish !== "tool-calls" && finish !== "length" && finish !== "error" && stepText.trim() === ""
 }
 
-export function noteFor(userText: string): string {
-  return ACTION.test(userText) && !HOWTO.test(userText) ? NOTE_DO : NOTE
+// 10-28: the command from a call written as text, quoted back so the model only has to re-send it as a real
+// call (the plugin can't run tools itself, and running them here would skip danger-guard and permissions)
+const CMD_PATTERNS = [
+  /\bcommand\s*[:=]\s*(`|"|')((?:\\.|(?!\1)[^\\])+?)\1/,
+  /(?<![\w.])(?:tools\.)?(?:shell|bash)\s*\(\s*(`|"|')((?:\\.|(?!\1)[^\\])+?)\1/,
+  /<\s*(?:shell|bash)\b[^>\n]*>\s*\n?([^<]+?)\s*<\/\s*(?:shell|bash)\s*>/,
+]
+export function extractCommand(text: string): string {
+  for (const re of CMD_PATTERNS) {
+    const m = text.match(re)
+    const cmd = (m?.[2] ?? m?.[1] ?? "").replace(/\\(["'`])/g, "$1").trim()
+    if (cmd && !cmd.includes("\n") && cmd.length <= 500) return cmd
+  }
+  return ""
+}
+
+// 10-28 Gemma (23/28/29): zero calls, whole site "written" as python open(...).write / cat > blocks in text,
+// then "Plik został utworzony". The note names the files that really don't exist on disk.
+const WRITE_PATTERNS = [
+  /\bopen\s*\(\s*(?:r|f)?(['"])([^'"\n]+)\1\s*,\s*(['"])[wax]b?\+?\3/g,
+  /\bPath\s*\(\s*(['"])([^'"\n]+)\1\s*\)\s*\.write_(?:text|bytes)/g,
+  /\bwriteFileSync\s*\(\s*(['"`])([^'"`\n]+)\1/g,
+  /\b(?:cat|echo|printf)\b[^\n|;&]*?>>?\s*(['"]?)([^\s'"<>|;&]+)\1/g,
+  /\btee\s+(?:-a\s+)?(['"]?)([^\s'"<>|;&]+)\1/g,
+]
+export function extractWrittenFiles(text: string): string[] {
+  const out: string[] = []
+  for (const re of WRITE_PATTERNS)
+    for (const m of text.matchAll(re)) if (!out.includes(m[2]) && m[2] !== "/dev/null") out.push(m[2])
+  return out
+}
+
+// relative names resolve against the first absolute directory in the user's prompt
+export function missingFiles(userText: string, assistantText: string, exists: (p: string) => boolean): string[] {
+  const base = userText.match(/(?:^|[\s"'`(])((?:~|\/home)\/[^\s"'`),;]+)/)?.[1]?.replace(/^~/, HOME).replace(/[.:]$/, "")
+  return extractWrittenFiles(assistantText).filter((f) => {
+    const p = f.startsWith("~/") ? join(HOME, f.slice(2)) : f.startsWith("/") ? f : base ? join(base, f) : ""
+    return p !== "" && !exists(p)
+  }).slice(0, 6)
+}
+
+export function noteFor(userText: string, assistantText = "", exists: (p: string) => boolean = existsSync): string {
+  const base = ACTION.test(userText) && !HOWTO.test(userText) ? NOTE_DO : NOTE
+  const cmd = extractCommand(assistantText)
+  const missing = missingFiles(userText, assistantText, exists)
+  let note = cmd
+    ? base + ` Komenda, którą napisałeś tekstem: \`${cmd}\` — jeśli trzeba ją wykonać, wyślij ją DOKŁADNIE jako wywołanie narzędzia shell (w Code Mode \`execute\`).`
+    : base
+  if (missing.length)
+    note += ` Te pliki zapisałeś tylko tekstem i NIE istnieją na dysku: ${missing.map((f) => `\`${f}\``).join(", ")} — ` +
+      "utwórz każdy z nich narzędziem write (w Code Mode `execute`), a potem sprawdź `ls`, że są."
+  return note
 }
 
 const HANDOFF = /uruchom\s+r(ę|e)cznie/iu
@@ -49,10 +99,16 @@ const SHELL_BLOCK = /```(?:bash|sh|shell|console|fish|zsh)\s*\n[\s\S]*?```/i
 const ANY_BLOCK = /```[^\n]*\n[\s\S]*?```/g
 // polecenie wykonania w prompcie (nie pytanie „jak …”)
 // granice słów przez \p{L}, bo \b w JS nie widzi polskich liter („sprawdź” na końcu słowa)
-const ACTION = /(?<!\p{L})(wykonaj|uruchom|odpal|sprawdź|sprawdz|przeczytaj|wyświetl|wyswietl|pokaż wynik|wklej|usuń|usun|zmień|zmien|popraw|edytuj|utwórz|utworz|stwórz|stworz|zapisz|skopiuj|przenieś|przenies|dodaj|zainstaluj|run|execute)(?!\p{L})/iu
+const ACTION = /(?<!\p{L})(wykonaj|uruchom|odpal|sprawdź|sprawdz|przeczytaj|wyświetl|wyswietl|pokaż wynik|wklej|usuń|usun|zmień|zmien|popraw|edytuj|utwórz|utworz|stwórz|stworz|zapisz|skopiuj|przenieś|przenies|dodaj|zainstaluj|napraw|run|execute)(?!\p{L})/iu
 // tool call written as TEXT instead of a real call (Gemma 4, 10-21): `tools.shell({...})` from the Code Mode API,
 // `<shell command="..."/>`, `shell(command=...)`. Unambiguous -> fires without an action verb in the prompt.
-const FAKE_CALL = /(?<![\w.])tools\.\w+\s*\(|<\s*(?:shell|bash|read|edit|write|execute|grep|glob)\b[^>\n]*\/?>|(?<![\w.])(?:shell|bash|execute)\s*\(\s*(?:command\s*=|\{)/i
+// 10-29 Gemma (29-blog-post-sitelint): 3 real calls, then 6 `<tool_call>{json}</tool_call>` blocks with made-up
+// responses ("has been written") in the final text — no file was created.
+const FAKE_CALL = /(?<![\w.])tools\.\w+\s*\(|<\s*(?:shell|bash|read|edit|write|execute|grep|glob|tool_call)\b[^>\n]*\/?>|(?<![\w.])(?:shell|bash|execute)\s*\(\s*(?:command\s*=|\{)/i
+// 10-28 Gemma (16-minimal-diff): after real calls the last step writes the next calls as a lone backticked line
+// (`edit stats.py oldString: …`, `python3 test_stats.py`) or announces a fix with only a ``` block — nothing ran
+const INLINE_CALL = /^[ \t]*`(?:read|edit|write|shell|bash|grep|glob|python3?|node|cat|ls|sed|pytest)\s[^`\n]{1,400}`[ \t]*$/m
+const ANNOUNCED_BLOCK = /(?<!\p{L})(?:uruchamiam|poprawiam|zmieniam|edytuj[eę]|zapisuj[eę]|tworz[eę]|wprowadzam)(?!\p{L})[^\n]*\n+\s*```/iu
 const PROMPT_CMD = /:[ \t]*\n\s*(?:cat|ls|head|tail|wc|grep|find|stat|du|df|file|sort|diff|python3?|bash|sh|git)\s+\S/
 const DONE_CLAIM = /(?<!\bnie\s)(?<!\p{L})(usunąłem|usunęłam|zmieniłem|zmieniłam|utworzyłem|utworzyłam|stworzyłem|skopiowałem|przeniosłem|zapisałem|zmodyfikowałem|poprawiłem|wykonałem|uruchomiłem|zainstalowałem|zaktualizowałem|edytowałem|dodałem)(?!\p{L})[^\n]{0,40}?(plik|katalog|folder|`|\/)/iu
 const HANDOFF_SCRIPT = /r(?:ę|e)cznie[\s\S]{0,200}?sudo\s+(?:(?:bash|sh)\s+)?[`'"]?\S*?([\w.-]+\.sh)\b/iu
@@ -64,6 +120,7 @@ export function shouldFire(userText: string, assistantText: string, calls: numbe
   // 10-23 Gemma (08-long-file-lookup): two real reads, then the last step ends with `print(shell(command="grep …"))`
   // as text — the earlier calls must not hide a fake call in the step that ends the turn
   if (FAKE_CALL.test(lastStepText)) return true
+  if (INLINE_CALL.test(lastStepText) || (ACTION.test(userText) && ANNOUNCED_BLOCK.test(lastStepText))) return true
   if (calls > 0) return false
   if (FAKE_CALL.test(assistantText)) return true
   // poprawne przekazanie komendy roota użytkownikowi (zadania 09/19) — tu brak wywołania jest właściwy
@@ -113,7 +170,7 @@ export default {
       log(`HIT ${sessionID} mode=${MODE} via=${delivery} user=${JSON.stringify(s.user.slice(0, 120))} text=${JSON.stringify(s.text.slice(0, 200))}`)
       if (MODE !== "act") return
       try {
-        await ctx.session.synthetic({ sessionID, text: noteFor(s.user), description: "no-call-guard", delivery })
+        await ctx.session.synthetic({ sessionID, text: noteFor(s.user, lastStepText || s.text), description: "no-call-guard", delivery })
         log(`synthetic sent ${sessionID} delivery=${delivery}`)
       } catch (e) {
         log(`synthetic error ${sessionID}: ${String(e)}`)

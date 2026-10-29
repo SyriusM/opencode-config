@@ -394,6 +394,36 @@ const similarLines = (path: unknown, oldString: unknown): string | undefined => 
   return `PODPOWIEDŹ: w pliku (linia ${i + 1}) ten fragment wygląda dokładnie tak — skopiuj go z tymi wcięciami jako oldString:\n${fragment.slice(0, 1500)}`
 }
 
+// Po „Found N matches”: pokazanie samej linii (similarLines) kazało skopiować ten sam nieunikalny fragment
+// (10-28 Gemma, zad. 27: 3× ten sam błąd → STOP). Dla każdego miejsca podaj najbliższą wyższą linię, która jest
+// w pliku tylko raz (np. `def check_delta(resp):`) — od niej do zmienianej linii oldString jest unikalny.
+export const multiMatchHint = (path: unknown, oldString: unknown): string | undefined => {
+  if (typeof path !== "string" || typeof oldString !== "string" || !oldString.trim()) return
+  let src: string
+  try {
+    src = readFileSync(path.replace(/^~(?=\/)/, homedir()), "utf8")
+  } catch {
+    return
+  }
+  if (src.length > 500_000) return
+  const lines = src.split("\n")
+  const count = new Map<string, number>()
+  for (const l of lines) count.set(l, (count.get(l) ?? 0) + 1)
+  const n = oldString.split("\n").length
+  const spots: string[] = []
+  for (let at = src.indexOf(oldString); at >= 0 && spots.length < 6; at = src.indexOf(oldString, at + 1)) {
+    const i = src.slice(0, at).split("\n").length - 1
+    let j = i - 1
+    while (j >= 0 && j >= i - 12 && (count.get(lines[j]) !== 1 || !lines[j].trim())) j--
+    if (j < 0 || j < i - 12) continue
+    spots.push(`- linia ${i + 1}:\n${lines.slice(j, i + n).join("\n").slice(0, 600)}`)
+  }
+  if (!spots.length) return
+  return `PODPOWIEDŹ: ten oldString występuje w pliku kilka razy. Do oldString dołącz linie powyżej, aż do takiej, ` +
+    `która jest w pliku tylko raz — wybierz miejsce, które masz zmienić, i skopiuj cały jego fragment:\n${spots.join("\n")}\n` +
+    `NIE używaj replaceAll, jeśli zmiana dotyczy tylko części tych miejsc — zmień każde osobnym edit.`
+}
+
 // Po „Could not find oldString” w pliku, którego model w tej sesji nie wczytał (15% błędów 30 dni: never-read)
 // albo wczytał tylko kawałkiem offset/limit (9%): powiedz to wprost, zanim spróbuje znowu z pamięci.
 const normPath = (p: unknown) => (typeof p === "string" && p ? resolve(p.replace(/^~(?=\/)/, homedir())) : "")
@@ -947,7 +977,9 @@ export default {
           }
         }
         if (tool === "edit" && msg.includes("oldString")) {
-          const hint = similarLines(input.path ?? input.filePath, input.oldString)
+          const hint = /Found \d+ matches/.test(msg)
+            ? multiMatchHint(input.path ?? input.filePath, input.oldString)
+            : similarLines(input.path ?? input.filePath, input.oldString)
           if (hint) {
             appendToError(ev, hint)
             log(`HINT-oldString ${tool} session=${ev.sessionID}`)

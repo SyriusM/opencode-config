@@ -8,13 +8,17 @@ Checks every *.html in DIR (or only the given files):
   ERROR  <img> without alt, form field without <label>
   ERROR  target=_blank without rel="noopener noreferrer", http:// URL, javascript: URL
   ERROR  unbalanced tags, invalid JSON-LD, id used in JS (getElementById/querySelector '#x') missing in HTML
-  ERROR  no <meta http-equiv="Content-Security-Policy">, or CSP with unsafe-inline/unsafe-eval
+  ERROR  no <meta http-equiv="Content-Security-Policy">, CSP with unsafe-inline/unsafe-eval or unknown directive
   ERROR  CSS with a :root palette (--vars) but colour literals outside :root (use var(--...))
   ERROR  local SVG shown via <img>/<object> uses var(--x) it does not define (page CSS does not reach it)
+  ERROR  JS handles 'submit' on a page with <form> but never calls preventDefault()
+  COUNT  per page: number of <article>/<form>/<pre>/<img> (compare with what the task asked for)
   WARN   inline <style>/style=/<script>/on* attributes, missing lang/viewport/<title>
 Exit 0 = no ERROR, 1 = errors found, 2 = usage.
 Written 2026-10-23 after training task 20: Gemma left 4-13 classes without CSS and never checked.
 2026-10-26: CSP and palette checks added after 35B failed tasks 20 (no CSP) and 23 (colours outside :root).
+2026-10-28: unknown CSP directives (Bonsai task 20 wrote form-src instead of form-action).
+2026-10-28: submit without preventDefault, element counts (task 20: nostuck, Qwen 35B / wmoff).
 2026-10-26: SVG var() check added after 35B task 23: logo.svg with var(--kolor2) in <img> = 0 palette colours.
 """
 import glob, json, os, re, sys
@@ -23,6 +27,15 @@ from html.parser import HTMLParser
 VOID = {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "track", "wbr"}
 OPTIONAL_END = {"p", "li", "tr", "td", "th", "thead", "tbody", "tfoot", "option", "dt", "dd"}
 COLOUR_PROPS = r"(?:color|background(?:-color)?|border(?:-[a-z]+)*|outline(?:-color)?|fill|stroke|stop-color|flood-color|box-shadow|text-shadow|text-decoration(?:-color)?|caret-color|accent-color)"
+# CSP Level 3 directives; meta-delivered CSP ignores META_IGNORED (header-only).
+CSP_DIRECTIVES = set("""default-src script-src script-src-elem script-src-attr style-src style-src-elem style-src-attr
+img-src font-src connect-src media-src object-src frame-src child-src worker-src manifest-src prefetch-src
+base-uri form-action frame-ancestors navigate-to sandbox report-uri report-to upgrade-insecure-requests
+block-all-mixed-content require-trusted-types-for trusted-types fenced-frame-src webrtc""".split())
+CSP_META_IGNORED = {"frame-ancestors", "report-uri", "report-to", "sandbox"}
+CSP_HINTS = {"form-src": "form-action", "frame-ancestor": "frame-ancestors", "base-src": "base-uri",
+             "script": "script-src", "style": "style-src", "default": "default-src", "image-src": "img-src",
+             "fonts-src": "font-src", "ajax-src": "connect-src", "xhr-src": "connect-src"}
 NAMED = set("""white black red green blue yellow orange purple pink brown gray grey silver gold navy teal maroon olive lime
 aqua fuchsia cyan magenta indigo violet beige ivory khaki crimson coral salmon tomato orchid plum tan lavender
 darkblue darkred darkgreen lightgray lightgrey darkgray darkgrey whitesmoke gainsboro midnightblue slategray""".split())
@@ -119,7 +132,8 @@ def main():
         return 2
     root = os.path.abspath(sys.argv[1])
     files = [os.path.join(root, f) for f in sys.argv[2:]] or sorted(glob.glob(os.path.join(root, "**", "*.html"), recursive=True))
-    errors, warns = [], []
+    errors, warns, notes = [], [], []
+    pd_reported = set()
     pages = {}
     for f in files:
         txt = read(f)
@@ -249,6 +263,15 @@ def main():
         if not csp:
             E("-", "no <meta http-equiv=\"Content-Security-Policy\"> in <head> (e.g. content=\"default-src 'self'\")")
         for pol in csp:
+            for part in pol.split(";"):
+                name = part.strip().split(" ")[0].lower() if part.strip() else ""
+                if not name:
+                    continue
+                if name not in CSP_DIRECTIVES:
+                    hint = CSP_HINTS.get(name)
+                    E("-", f"CSP: unknown directive '{name}' (browser ignores it)" + (f", did you mean '{hint}'?" if hint else ""))
+                elif name in CSP_META_IGNORED:
+                    W("-", f"CSP: '{name}' is ignored in <meta> (works only as an HTTP header)")
             if re.search(r"unsafe-inline|unsafe-eval", pol):
                 E("-", "CSP allows 'unsafe-inline'/'unsafe-eval' (move inline scripts/styles to files)")
             elif not re.search(r"(default|script)-src", pol):
@@ -260,6 +283,11 @@ def main():
             W("-", "no meta viewport")
         if not d.title.strip():
             W("-", "empty or missing <title>")
+        # 10-28 (task 20, Bonsai nostuck): submit handler without preventDefault() = the browser still sends the form
+        has_form = any(t == "form" for t, _, _, _ in d.tags)
+        # 10-28 (task 20, Qwen/wmoff): fewer <article> than asked; site-lint can't know the prompt, so only a count
+        counts = {k: sum(1 for t, _, _, _ in d.tags if t == k) for k in ("article", "form", "pre", "img")}
+        notes.append(f"{os.path.relpath(f, root)}: " + ", ".join(f"{n} <{k}>" for k, n in counts.items() if n))
         # ids used by local JS on this page
         for t, a, _, ln in d.tags:
             if t == "script" and local(a.get("src", "")):
@@ -267,6 +295,10 @@ def main():
                 if p not in js_cache:
                     js_cache[p] = strip_comments(read(p) or "", "js")
                 js = js_cache[p]
+                if (has_form and re.search(r"addEventListener\(\s*['\"]submit['\"]|\.onsubmit\s*=", js)
+                        and "preventDefault" not in js and p not in pd_reported):
+                    pd_reported.add(p)
+                    E(ln, f"{os.path.relpath(p, root)} handles 'submit' without event.preventDefault() (the page reloads and sends the form)")
                 want = set(re.findall(r"getElementById\(\s*['\"]([\w-]+)['\"]", js))
                 want |= set(re.findall(r"querySelector(?:All)?\(\s*['\"]#([\w-]+)['\"]", js))
                 for i in sorted(want - all_ids[f]):
@@ -278,6 +310,8 @@ def main():
         print("ERROR " + x)
     for x in warns:
         print("WARN  " + x)
+    for x in notes:
+        print("COUNT " + x)
     print(f"site-lint: {len(pages)} page(s), {len(errors)} error(s), {len(warns)} warning(s)")
     return 1 if errors else 0
 
