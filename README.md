@@ -28,6 +28,7 @@ To czysty kod, bez konfiguracji modeli, promptów i danych.
 | `bin/agent-rule` | Pozwala modelowi dopisać krótką regułę do bloku `LEARNED` w `AGENTS.md` (limit 10 linii, z kopią). |
 | `bin/freecode-tune` | Strojenie serwera llama.cpp uruchomionego jako usługa systemd `--user`: próba nowych flag, pomiar, a potem zostawienie albo cofnięcie zmiany. |
 | `bin/crop-image` | Wycina fragment obrazka według współrzędnych w procentach, żeby model z obrazami mógł obejrzeć szczegół. |
+| `skills/verify-dont-assume` | Skill dla modelu: sprawdzaj prawdziwy stan zamiast ufać kodowi wyjścia, nazwie narzędzia albo podsumowaniu po kompaktowaniu (kopie i ich kasowanie, flagi bez efektu, ścieżki i ID z podsumowań). Każda reguła pochodzi z prawdziwej wpadki. Instaluje go `install.sh`. |
 | `freecode/freecode` | opencode tylko na lokalnych modelach: konfigurator przy pierwszym starcie, kontrola konfiguracji przed każdym startem (opis niżej). |
 | `freecode/rebrand` | Kopia źródeł opencode z nazwą freecode (`rebrand SOURCE TARGET`; log `TARGET.log.tsv`, podsumowanie `TARGET.summary.md`). Czego nie można zmienić (licencja, domeny, repozytoria, zewnętrzne paczki npm, pliki binarne, logo), zapisuje do logu z plikiem i linią. Dodatkowo spisuje wszystkie adresy sieciowe w kodzie. |
 | `bin/audit-retention` + `systemd/` | Co tydzień przenosi audyt starszy niż 30 dni do archiwum tar. Pliki kasuje dopiero po weryfikacji bajt w bajt. |
