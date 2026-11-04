@@ -6,6 +6,8 @@ To czysty kod, bez konfiguracji modeli, promptów i danych.
 
 > **English summary.** Plugins and scripts for [opencode](https://opencode.ai) 2.x running **local models only** (llama.cpp, no cloud, no subscription). They catch the typical failures of small local models: they fix malformed tool calls before they run, stop loops of identical failing calls, detect "results" the model made up without calling a tool, strip tool calls written as plain text, and block dangerous or outbound shell commands (`rm -rf ~`, `curl | bash`, `git push`, uploads). After edits they auto-run site linting and Python tests and feed the errors back to the model. `freecode` is opencode locked to local models, with a first-run setup wizard. `bootstrap.sh` detects your GPU, VRAM and driver, then installs llama.cpp, a fitting model, opencode and the plugins with one command. Developed and measured on an RTX 3080 (10 GB VRAM): Qwen3.6-35B-A3B runs at ~80–110 tok/s with a 128k context (MoE experts in RAM). Code and identifiers are in English; the rest of this README is in Polish.
 
+📝 Blog post on why and how: [English](https://syriusm.github.io/syriusm-blog/wpis-freecode-en.html) · [po polsku](https://syriusm.github.io/syriusm-blog/wpis-freecode.html).
+
 ## Zawartość
 
 | Ścieżka | Co robi |
