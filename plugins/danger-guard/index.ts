@@ -241,6 +241,28 @@ export function message(hit: { name: string; why: string }, cmd: string): string
   )
 }
 
+// 11-05 Bonsai (zad. 09): glob "*sudo *": deny w opencode.json odrzuca KAŻDĄ komendę ze słowem sudo i spacją
+// (też `command -v sudo`, `which sudo`), a model dostaje samo "Permission denied: shell" i próbuje 5 wariantów.
+// Podmieniamy taką komendę na komunikat z podpowiedzią. Glob opencode z końcowym " *" = spacja opcjonalna,
+// więc pasuje KAŻDE wystąpienie ciągu "sudo" (nawet "pseudo") — w komunikacie tego ciągu nie może być wcale.
+const SUDO_GLOB = /sudo/
+export function sudoHint(cmd: string): string | null {
+  if (typeof cmd !== "string" || !SUDO_GLOB.test(cmd)) return null
+  return (
+    `[danger-guard] NIE uruchomione: opencode blokuje każdą komendę, w której pojawia się nazwa programu do ` +
+    `uprawnień roota (s-u-d-o), także samo sprawdzanie (which/command -v). Nie sprawdzaj, czy ten program istnieje, ` +
+    `i nie próbuj innych wariantów. ` +
+    `Jeśli zadanie wymaga roota: zrób wszystko, co się da bez roota, a użytkownikowi napisz „Uruchom RĘCZNIE ` +
+    `w swoim terminalu:” i podaj dokładną komendę. Pozostałe sprawdzenia uruchom komendą bez tego słowa.`
+  )
+}
+
+// ciąg "sudo" w printf (np. komenda w message()) -> glob "*sudo *": deny odrzuci też sam komunikat.
+// 11-09: zamiast niewidocznego ZWSP (model kopiował go do „Uruchom RĘCZNIE” -> command not found) rozcinamy
+// słowo cudzysłowem: w komendzie stoi su""do (glob nie pasuje), a powłoka wypisuje prawdziwe "sudo".
+export const printfCommand = (text: string): string =>
+  `printf '%s\\n' ${JSON.stringify(text).replace(/[`$]/g, "").replace(/sudo/g, 'su""do')} >&2; exit 1`
+
 export default {
   id: "danger-guard",
   async setup(ctx: any) {
@@ -258,11 +280,12 @@ export default {
         else if (tool === "execute" && typeof input.code === "string") cmd = input.code
         if (!cmd) return
         const hit = checkWithScripts(cmd, input.workdir ?? input.cwd ?? ev.directory ?? ev.cwd)
-        if (!hit) return
-        const text = message(hit, cmd)
+        const hint = hit || tool === "execute" ? null : sudoHint(cmd)
+        if (!hit && !hint) return
+        const text = hit ? message(hit, cmd) : hint!
         if (tool === "execute") ev.input = { ...input, code: `throw new Error(${JSON.stringify(text)})` }
-        else ev.input = { ...input, command: `printf '%s\\n' ${JSON.stringify(text).replace(/[`$]/g, "")} >&2; exit 1` }
-        log(`BLOCK ${hit.name} ses=${ev.sessionID ?? "?"} ${tool}: ${cmd.slice(0, 300).replace(/\n/g, "⏎")}`)
+        else ev.input = { ...input, command: printfCommand(text) }
+        log(`BLOCK ${hit ? hit.name : "sudo_hint"} ses=${ev.sessionID ?? "?"} ${tool}: ${cmd.slice(0, 300).replace(/\n/g, "⏎")}`)
       } catch (e) {
         log(`danger-guard hook failed: ${e}`)
       }

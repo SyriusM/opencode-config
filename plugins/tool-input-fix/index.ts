@@ -434,6 +434,17 @@ const unreadFileHint = (path: string, readState: "never" | "partial") =>
     : `UWAGA: plik ${path} wczytałeś tylko fragmentami (offset/limit) — zmieniane miejsce mogło być poza nimi. ` +
       `Wczytaj read okolicę, którą zmieniasz, i skopiuj oldString dosłownie z wyniku (bez numerów linii "N: ").`
 
+// Grupa C (11-04 self-repair: HINT-oldString docierał, model i tak powtarzał oldString z pamięci):
+// od 2. „Could not find oldString” w TYM SAMYM pliku bez read pomiędzy — twarda notka „następne wywołanie = read”.
+// Licznik zeruje udany read/write/edit tego pliku. Edit-u nie da się zablokować w before (patrz deliver), więc notka.
+export const oldStringRepeatNote = (n: number, path: string): string | undefined =>
+  n < 2
+    ? undefined
+    : `\nSTOP: to już ${n}. nieudany edit pliku ${path} („Could not find oldString”) bez wczytania go pomiędzy. ` +
+      `Twoja pamięć treści tego pliku jest NIEAKTUALNA. Następne wywołanie MA BYĆ read na ${path} (cały plik albo okolica zmiany). ` +
+      `Dopiero potem edit z oldString skopiowanym dosłownie z wyniku read (bez numerów linii "N: "). ` +
+      `Jeśli zmiana jest duża — write całego pliku po read.`
+
 // glob (*?[) traktujemy jak istniejącą ścieżkę — model właśnie sprawdza, nie zgaduje
 const pathExists = (p: string) => {
   if (/[*?[]/.test(p)) return true
@@ -785,6 +796,8 @@ export default {
 
     // sessionID → (plik → "full" | "partial"): co model widział w tej sesji (read, write, udany edit, cat/sed w shellu)
     const seen = new Map<string, Map<string, "full" | "partial">>()
+    // sessionID → (plik → liczba „Could not find oldString” od ostatniego udanego read/write/edit tego pliku)
+    const oldStringFails = new Map<string, Map<string, number>>()
     // sesja utworzona po załadowaniu wtyczki = znamy całą jej historię, więc pierwsze zdarzenie też się liczy
     // (10-20: edit jako pierwsze wywołanie sesji nie dostawał hinta). ID opencode "ses_" + 12 hex = ~(ms*4096+licznik) mod 2^48
     const loadedAt = BigInt(Date.now() - 5000) * 4096n
@@ -931,6 +944,7 @@ export default {
         const okRes = ev.status !== "error" && res?.metadata?.error !== true
         if (/^(read|write|edit)$/.test(tool)) {
           const fp = normPath(ev.input?.filePath ?? ev.input?.path)
+          if (fp && okRes) oldStringFails.get(String(ev.sessionID))?.delete(fp)
           if (fp && okRes) {
             const partial = tool === "read" && (ev.input?.offset || ev.input?.limit)
             if (!partial) m.set(fp, "full")
@@ -974,6 +988,22 @@ export default {
           if (readState !== "full") {
             appendToError(ev, "\n" + unreadFileHint(fp, readState ? "partial" : "never"))
             log(`HINT-read-first ${readState ? "partial" : "never"} session=${ev.sessionID}`)
+          }
+          if (fp) {
+            const sid = String(ev.sessionID)
+            let fm = oldStringFails.get(sid)
+            if (!fm) {
+              if (oldStringFails.size > 200) oldStringFails.clear()
+              fm = new Map()
+              oldStringFails.set(sid, fm)
+            }
+            const n = (fm.get(fp) ?? 0) + 1
+            fm.set(fp, n)
+            const note = oldStringRepeatNote(n, fp)
+            if (note) {
+              appendToError(ev, note)
+              log(`HINT-oldString-repeat n=${n} session=${sid}`)
+            }
           }
         }
         if (tool === "edit" && msg.includes("oldString")) {

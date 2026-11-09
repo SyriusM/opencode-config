@@ -30,6 +30,50 @@ const MODEL_UNITS: Record<string, string> = {
   "llama-gemma4.service": "Gemma 26B",
   "llama-small.service": "Qwen 4B",
   "llama-qwen38.service": "Qwen 27B",
+  "llama-bonsai.service": "Bonsai 27B",
+}
+
+// Live speed: /slots on BACKEND ports (never proxy sockets — would wake a model).
+const SPEED_MS = 1_000
+const BACKEND_PORTS = [8116, 8086, 8120, 8094, 8096, 8098]
+type Speed = { phase: "GEN" | "PROMPT"; tps: number; done: number; total?: number }
+const [speed, setSpeed] = createSignal<Speed | null>(null)
+const [lastSpeed, setLastSpeed] = createSignal<Speed | null>(null)
+const prevSlot = new Map<number, { t: number; task: number; prompt: number; decoded: number }>()
+
+async function pollSpeed() {
+  let current: Speed | null = null
+  await Promise.all(
+    BACKEND_PORTS.map(async (port) => {
+      let slot: any
+      try {
+        const res = await fetch(`http://127.0.0.1:${port}/slots`, { signal: AbortSignal.timeout(400) })
+        slot = (await res.json())[0]
+      } catch {
+        prevSlot.delete(port)
+        return
+      }
+      const t = Date.now()
+      const cur = {
+        t,
+        task: slot.id_task,
+        prompt: slot.n_prompt_tokens_processed ?? 0,
+        decoded: slot.next_token?.[0]?.n_decoded ?? 0,
+      }
+      const prev = prevSlot.get(port)
+      prevSlot.set(port, cur)
+      if (!slot.is_processing || !prev || prev.task !== cur.task) return
+      const dt = (cur.t - prev.t) / 1000
+      if (dt <= 0) return
+      if (cur.decoded > prev.decoded) {
+        current = { phase: "GEN", tps: (cur.decoded - prev.decoded) / dt, done: cur.decoded }
+      } else if (cur.prompt > prev.prompt) {
+        current = { phase: "PROMPT", tps: (cur.prompt - prev.prompt) / dt, done: cur.prompt, total: slot.n_prompt_tokens }
+      }
+    }),
+  )
+  setSpeed(current)
+  if (current) setLastSpeed(current)
 }
 
 type GpuSample = {
@@ -114,7 +158,11 @@ function startMetering() {
 
   void tick()
   const timer = setInterval(() => void tick(), SAMPLE_MS)
-  return () => clearInterval(timer)
+  const speedTimer = setInterval(() => void pollSpeed(), SPEED_MS)
+  return () => {
+    clearInterval(timer)
+    clearInterval(speedTimer)
+  }
 }
 
 const pl = (value: number, digits: number) => value.toFixed(digits).replace(".", ",")
@@ -147,6 +195,18 @@ function FooterStatus() {
   )
 }
 
+function speedText() {
+  const s = speed()
+  if (s) {
+    return s.phase === "GEN"
+      ? `generuje ${pl(s.tps, 1)} tok/s (${s.done} tok)`
+      : `czyta prompt ${pl(s.tps, 0)} tok/s (${s.done}/${s.total ?? "?"})`
+  }
+  const l = lastSpeed()
+  if (!l) return "tok/s: bezczynny"
+  return `bezczynny · ostatnio ${l.phase === "GEN" ? "gen." : "prompt"} ${pl(l.tps, l.phase === "GEN" ? 1 : 0)} tok/s`
+}
+
 function SidebarSection() {
   const context = usePlugin()
   const theme = context.theme
@@ -156,6 +216,7 @@ function SidebarSection() {
         <b>Prąd i GPU</b>
       </text>
       <Show when={model()}>{(name) => <text fg={theme.text.muted}>model: {name()}</text>}</Show>
+      <text fg={speed() ? theme.text.base : theme.text.muted}>{speedText()}</text>
       <Show when={gpu()} fallback={<text fg={theme.text.muted}>GPU: brak odczytu</text>}>
         {(sample) => (
           <>
