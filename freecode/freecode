@@ -18,6 +18,7 @@ freecode to NAKŁADKA na niezmieniony opencode, nie fork: opencode aktualizuje s
 Dlaczego: opencode 2.x bez poprawnej konfiguracji (brak pliku, uszkodzony JSON, brak lokalnego
 `small_model`) po cichu wysyła rozmowę do darmowych modeli w chmurze. freecode przed każdym startem
 sprawdza wszystkie źródła konfiguracji i odmawia startu, jeśli którykolwiek dostawca nie jest lokalny.
+Odmawia też przy `share: auto`, nielokalnym `enterprise.url`, zdalnym serwerze MCP i nadpisanym adresie modelu.
 TUI idzie przez usługę w tle (ta sama sesja w terminalu i w przeglądarce/telefonie). Usługa trzyma
 konfigurację z chwili swojego startu, więc gdy plik konfiguracji jest nowszy, freecode ją restartuje,
 a jeśli usługa właśnie liczy sesję, startuje prywatny serwer (`--standalone`). `run` zawsze idzie
@@ -47,6 +48,7 @@ OC_DIR = os.environ.get("OPENCODE_CONFIG_DIR") or os.path.join(XDG, "opencode")
 FC_DIR = os.path.join(XDG, "freecode")
 MARKER = os.path.join(FC_DIR, "configured")
 OLD_MARKER = os.path.join(FC_DIR, "skonfigurowane")  # before 2026-10-21
+ENV_STAMP = os.path.join(FC_DIR, "env-checked")     # kiedy ostatnio sprawdzono opis komputera
 CONFIG_NAMES = ("opencode.jsonc", "opencode.json", "config.json")
 # standardowe porty lokalnych serwerów modeli
 SERVERS = [("llama.cpp", 8080), ("Ollama", 11434), ("LM Studio", 1234), ("vLLM", 8000)]
@@ -169,9 +171,9 @@ def check(directory="."):
             if k == "provider" and isinstance(v, dict):
                 for pid, p in v.items():
                     providers.setdefault(pid, {}).update(p if isinstance(p, dict) else {})
-            elif k == "agent" and isinstance(v, dict):
+            elif k in ("agent", "mcp") and isinstance(v, dict):
                 for a, cfg in v.items():
-                    merged.setdefault("agent", {}).setdefault(a, {}).update(cfg if isinstance(cfg, dict) else {})
+                    merged.setdefault(k, {}).setdefault(a, {}).update(cfg if isinstance(cfg, dict) else {})
             else:
                 merged[k] = v
     if problems:
@@ -188,6 +190,17 @@ def check(directory="."):
             problems.append(f"dostawca `{pid}` nie ma `options.baseURL` — nie wiadomo, czy jest lokalny")
         elif not is_local(url):
             problems.append(f"dostawca `{pid}` nie jest lokalny ({url}); dozwolone: localhost, 127.0.0.0/8, ::1, FREECODE_HOSTS")
+        prov = providers.get(pid) or {}
+        overrides = [(f"provider.{pid}.api", prov.get("api"))]   # adres może być nadpisany poza options.baseURL
+        for mid, m in (prov.get("models") or {}).items() if isinstance(prov.get("models"), dict) else ():
+            if isinstance(m, dict):
+                overrides.append((f"provider.{pid}.models.{mid}.provider.api", (m.get("provider") or {}).get("api")
+                                  if isinstance(m.get("provider"), dict) else None))
+                overrides.append((f"provider.{pid}.models.{mid}.options.baseURL", (m.get("options") or {}).get("baseURL")
+                                  if isinstance(m.get("options"), dict) else None))
+        for name, u in overrides:
+            if isinstance(u, str) and "://" in u and not is_local(u):
+                problems.append(f"`{name}` = {u}: adres nie jest lokalny")
     models = [("model", merged.get("model")), ("small_model", merged.get("small_model"))]
     models += [(f"agent.{a}.model", cfg.get("model")) for a, cfg in (merged.get("agent") or {}).items() if cfg.get("model")]
     for name, m in models:
@@ -196,6 +209,16 @@ def check(directory="."):
                             + (" (small_model służy m.in. do tytułów sesji)" if name == "small_model" else ""))
         elif provider_of(m) not in enabled:
             problems.append(f"`{name}` = {m}: dostawca spoza `enabled_providers`")
+    # inne drogi, którymi treść sesji wychodzi z komputera
+    if merged.get("share") == "auto" or merged.get("autoshare") is True:
+        problems.append("`share` = auto — sesje byłyby automatycznie udostępniane w sieci (ustaw \"disabled\" albo \"manual\")")
+    ent = (merged.get("enterprise") or {}).get("url") if isinstance(merged.get("enterprise"), dict) else None
+    if isinstance(ent, str) and ent and not is_local(ent):
+        problems.append(f"`enterprise.url` = {ent}: adres nie jest lokalny")
+    for name, m in (merged.get("mcp") or {}).items() if isinstance(merged.get("mcp"), dict) else ():
+        if m.get("type") == "remote" and m.get("enabled") is not False and not is_local(str(m.get("url") or "")):
+            problems.append(f"serwer MCP `{name}` jest zdalny ({m.get('url')}); wyłącz go (\"enabled\": false) "
+                            "albo dodaj host do FREECODE_HOSTS")
     return problems, merged, files[0][0]
 
 
@@ -323,12 +346,42 @@ def env_facts(url, model):
     return "## Environment (auto: `freecode --env`, " + time.strftime("%Y-%m-%d") + ")\n" + "\n".join(lines)
 
 
+def current_env():
+    """Obecny blok ENV z AGENTS.md (bez znaczników) albo ""."""
+    try:
+        text = open(AGENTS_FILE, encoding="utf-8").read()
+    except OSError:
+        return ""
+    if ENV_START not in text or ENV_END not in text:
+        return ""
+    return text.split(ENV_START, 1)[1].split(ENV_END, 1)[0].strip("\n")
+
+
 def write_env(url=None, model=None):
-    """Wpisuje/odświeża blok ENV w AGENTS.md; reszty pliku nie rusza."""
+    """Wpisuje/odświeża blok ENV w AGENTS.md; reszty pliku nie rusza.
+
+    Zapisuje tylko, gdy zmieniły się fakty (sama data w nagłówku się nie liczy): każdy zapis zmienia
+    mtime AGENTS.md, a to restartuje usługę w tle i unieważnia cache promptu. Zwraca True po zapisie.
+    """
     if not url:
         url, model = current_server()
-    write_block(ENV_START, ENV_END, env_facts(url, model))
-    info(color(32, f"  środowisko wpisane do {AGENTS_FILE}"))
+    new, old = env_facts(url, model), current_env()
+    line = next((l for l in new.splitlines() if l.startswith("- Model:")), "")
+    if line and ", context " not in line:   # serwer nie odpowiedział — zostaje znany kontekst tego samego modelu
+        kept = next((l for l in old.splitlines() if l.startswith(line + ", context ")), None)
+        if kept:
+            new = new.replace(line, kept)
+    changed = not old or old.split("\n", 1)[-1] != new.split("\n", 1)[-1]
+    if changed:
+        write_block(ENV_START, ENV_END, new)
+        info(color(32, f"  środowisko wpisane do {AGENTS_FILE}"))
+    try:
+        os.makedirs(FC_DIR, exist_ok=True)
+        with open(ENV_STAMP, "w") as f:
+            f.write(time.strftime("%Y-%m-%d %H:%M:%S\n"))
+    except OSError:
+        pass
+    return changed
 
 
 def stage_connect():
@@ -670,7 +723,8 @@ def undo_prefs():
 def stage_env():
     """Etap 4: opis komputera w AGENTS.md + wskazówka o strojeniu serwera."""
     info("freecode — etap 4: opis komputera")
-    write_env()
+    if not write_env():
+        info(color(2, f"  środowisko bez zmian ({AGENTS_FILE})"))
     if shutil.which("freecode-tune"):
         info(color(2, "  - szybkość serwera: `freecode-tune status` / w opencode „dostrój model” (mierzy i cofa, gdy gorzej)"))
     return 0
@@ -795,12 +849,15 @@ def guard(directory):
 
 
 def refresh_env(directory):
-    """Opis komputera świeży: najwyżej doba albo zmiana configu (model, kontekst)."""
+    """Opis komputera świeży: sprawdzany najwyżej raz na dobę albo po zmianie configu (model, kontekst).
+
+    Wiek liczony od znacznika ENV_STAMP, nie od mtime AGENTS.md — sprawdzenie bez zmian nie rusza pliku.
+    """
     if not os.path.isfile(AGENTS_FILE):
         return
-    age = os.path.getmtime(AGENTS_FILE)
+    last = os.path.getmtime(ENV_STAMP) if os.path.isfile(ENV_STAMP) else os.path.getmtime(AGENTS_FILE)
     cfgs = [os.path.getmtime(p) for p, c in sources(directory) if c is None]
-    if time.time() - age > 86400 or any(t > age for t in cfgs):
+    if time.time() - last > 86400 or any(t > last for t in cfgs):
         try:
             write_env()
         except OSError:
@@ -842,7 +899,9 @@ def main(argv):
     argv = [{"--konfiguruj": "--configure", "--sprawdz": "--check", "--optimize": "--configure",
              "--optymalizuj": "--configure"}.get(a, a) for a in argv[:1]] + argv[1:]
     if argv[:1] == ["--env"]:
-        write_env(); return 0
+        if not write_env():
+            info(color(2, f"  środowisko bez zmian ({AGENTS_FILE})"))
+        return 0
     if argv[:1] == ["--configure"]:
         stages = "".join(argv[1:]) or "1234"
         if not stages or any(n not in STAGES for n in stages):

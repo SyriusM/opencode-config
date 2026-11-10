@@ -49,4 +49,5 @@ run power-cost-tariff "${NODE[@]}" "$HERE/power-cost-tariff.test.mjs" "$WORK/pow
 run danger-guard "${NODE[@]}" "$HERE/danger-guard.test.mjs" "$WORK/danger-guard.ts"
 run work-mode "${NODE[@]}" "$HERE/work-mode.test.mjs" "$WORK/work-mode.ts"
 run freecode-tune python3 "$HERE/../freecode-tune.test.py"
+run freecode python3 "$HERE/../freecode.test.py"
 exit $fail

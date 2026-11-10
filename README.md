@@ -122,7 +122,7 @@ Co robi:
 - **`freecode --set narration=b`** zmienia styl pracy bez pytań. Model używa tego po złej ocenie pracy, ale tylko po Twojej zgodzie. **`freecode --undo`** cofa ostatnią zmianę (historia w `~/.local/share/freecode/prefs-history.jsonl`);
 - **tryb pracy** (wtyczka `work-mode`): w `opencode run` / `--auto` nikt nie odpowie, więc model sam bierze rekomendowaną opcję i mówi, którą; w TUI podaje opcje i czeka. Wymuszenie: `FREECODE_MODE=auto|step`;
 - **opisuje komputer w `AGENTS.md`** (blok `ENV`: system, menedżer pakietów, GPU i VRAM, RAM, model i kontekst), odświeżany co dobę albo ręcznie `freecode --env` — model nie musi pytać o podstawy. Reszty pliku nie rusza; własnych `AGENTS.md` i promptów `install.sh` nie nadpisuje;
-- **przy każdym starcie** sprawdza wszystkie źródła konfiguracji: globalne, `$OPENCODE_CONFIG`, `$OPENCODE_CONFIG_CONTENT` i pliki projektu aż do korzenia repozytorium. Odmawia startu, jeśli JSON jest uszkodzony albo którykolwiek model czy dostawca nie jest lokalny (localhost, 127.0.0.0/8, ::1, hosty z `FREECODE_HOSTS`);
+- **przy każdym starcie** sprawdza wszystkie źródła konfiguracji: globalne, `$OPENCODE_CONFIG`, `$OPENCODE_CONFIG_CONTENT` i pliki projektu aż do korzenia repozytorium. Odmawia startu, jeśli JSON jest uszkodzony albo którykolwiek model czy dostawca nie jest lokalny (localhost, 127.0.0.0/8, ::1, hosty z `FREECODE_HOSTS`). To samo dotyczy innych dróg wyjścia treści sesji: `share: "auto"`, `enterprise.url`, włączonego zdalnego serwera MCP (`type: remote`) i adresu nadpisanego w `provider.X.api` albo na poziomie modelu;
 - uruchamia opencode z `--standalone`, czyli z własnym serwerem z właśnie sprawdzoną konfiguracją, oraz z `OPENCODE_DISABLE_AUTOUPDATE` i `OPENCODE_DISABLE_MODELS_FETCH`.
 
 ```sh
