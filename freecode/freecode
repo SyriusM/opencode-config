@@ -343,7 +343,8 @@ def env_facts(url, model):
         f"- Desktop: {desktop or 'none / unknown'}",
         f"- CPU: {cpu}, {os.cpu_count()} threads; RAM {ram} GB",
         f"- GPU: {gpu or 'none detected'}",
-        f"- Model: `{model or '?'}` at {url or '?'}" + (f", context {ctx} tokens — keep reads short" if ctx else ""),
+        f"- Model: `{model or '?'}` at {url or '?'}" + (f", context {ctx} tokens — keep reads short" if ctx else "")
+        + " (default model; an agent may run on another — check your own model, not this line)",
         "- Model runs locally: heavy GPU/RAM jobs (games, training, other models) slow it down or kill it.",
     ]
     return "## Environment (auto: `freecode --env`, " + time.strftime("%Y-%m-%d") + ")\n" + "\n".join(lines)
@@ -371,7 +372,8 @@ def write_env(url=None, model=None):
     new, old = env_facts(url, model), current_env()
     line = next((l for l in new.splitlines() if l.startswith("- Model:")), "")
     if line and ", context " not in line:   # serwer nie odpowiedział — zostaje znany kontekst tego samego modelu
-        kept = next((l for l in old.splitlines() if l.startswith(line + ", context ")), None)
+        head = line.split(" (default model", 1)[0]
+        kept = next((l for l in old.splitlines() if l.startswith(head + ", context ")), None)
         if kept:
             new = new.replace(line, kept)
     changed = not old or old.split("\n", 1)[-1] != new.split("\n", 1)[-1]
