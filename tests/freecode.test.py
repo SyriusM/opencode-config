@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Offline test of freecode: the ENV block in AGENTS.md is rewritten only when facts change;
-check() flags every config path that would send session content off the machine.
+check() flags every config path that would send session content off the machine;
+refusal() stops commands that reach the network; a stale service gets `opencode reload`, not a restart.
 No opencode, no model server — HOME and config dirs are temporary.
 Usage: python3 tests/freecode.test.py [path/to/freecode]"""
 import importlib.machinery
@@ -176,6 +177,103 @@ ok(any("MCP `x`" in p for p in fc.check(work)[0]), "project mcp does not hide gl
 with open(os.path.join(work, "opencode.json"), "w") as f:
     json.dump({"mcp": {"x": {"enabled": False}}}, f)
 ok(fc.check(work)[0] == [], "project file can disable the remote MCP")
+
+
+# refusal(): commands that reach the network or expose the server never go to opencode
+for argv, name in [(["upgrade"], "upgrade"), (["auth", "login"], "auth"), (["uninstall"], "uninstall"),
+                   (["plugin", "add", "x"], "plugin add"), (["plugin", "update"], "plugin update"),
+                   (["mcp", "auth", "x"], "mcp auth"), (["pair", "--remote"], "pair --remote"),
+                   (["pair", "--url", "https://t.example.com"], "pair --url remote"),
+                   (["session", "import", "https://example.com/s.json"], "session import URL"),
+                   (["--server", "https://oc.example.com"], "--server remote"),
+                   (["--server=https://oc.example.com"], "--server= remote"),
+                   (["models", "--server", "http://10.0.0.5:4096"], "subcommand --server remote")]:
+    ok(fc.refusal(argv), f"refused: {name}")
+for argv, name in [([], "TUI"), (["run", "hi"], "run"), (["pair"], "pair"), (["plugin", "list"], "plugin list"),
+                   (["mcp", "list"], "mcp list"), (["session", "import", "s.json"], "session import file"),
+                   (["--server", "http://127.0.0.1:4096"], "--server loopback"), (["models"], "models"),
+                   (["stats", "--all"], "stats"), (["reload"], "reload")]:
+    ok(fc.refusal(argv) is None, f"allowed: {name}")
+
+# service_mode(): stale config -> `opencode reload` (same process), restart only as a fallback
+import http.server
+import subprocess
+import threading
+
+os.environ.pop("XDG_CONFIG_HOME")
+active = {"data": {}}
+
+
+class Handler(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        body = json.dumps(active).encode()
+        self.send_response(200)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, *a):
+        pass
+
+
+httpd = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+threading.Thread(target=httpd.serve_forever, daemon=True).start()
+calls = os.path.join(tmp, "oc-calls")
+oc = os.path.join(tmp, "fake-opencode")
+with open(oc, "w") as f:
+    f.write(f'#!/bin/sh\necho "$*" >> {calls}\n[ "$1" = reload ] && [ -e {tmp}/reload-fails ] && exit 1\nexit 0\n')
+os.chmod(oc, 0o755)
+clean = {"PATH": os.environ["PATH"]}
+svc = subprocess.Popen(["sleep", "60"], env=clean)
+svc_env = subprocess.Popen(["sleep", "60"], env=dict(clean, OPENCODE_CONFIG="/x.json"))
+
+
+def service(proc):
+    os.makedirs(os.path.dirname(fc.SERVICE_JSON), exist_ok=True)
+    with open(fc.SERVICE_JSON, "w") as f:
+        json.dump({"pid": proc.pid, "password": "p", "url": f"http://127.0.0.1:{httpd.server_port}"}, f)
+
+
+def oc_calls():
+    out = open(calls).read().split("\n")[:-1] if os.path.exists(calls) else []
+    if os.path.exists(calls):
+        os.remove(calls)
+    return out
+
+
+open(fc.AGENTS_FILE, "a").close()
+for root in (fc.OC_DIR, work):
+    for name in os.listdir(root):
+        if os.path.isfile(os.path.join(root, name)):
+            age(os.path.join(root, name), 1000)
+fc.proc_start = lambda pid: time.time() - 500
+service(svc)
+ok(fc.service_mode(oc, work) is None and oc_calls() == [], "fresh service: nothing to do")
+age(cfg, 100)
+ok(fc.service_mode(oc, work) is None and oc_calls() == ["reload"], "stale config: reload, no restart")
+ok(open(fc.RELOAD_STAMP).read() == str(svc.pid), "reload stamp holds the service pid")
+ok(fc.service_mode(oc, work) is None and oc_calls() == [], "after reload: nothing to do")
+age(fc.AGENTS_FILE, -5)
+ok(fc.service_mode(oc, work) is None and oc_calls() == ["reload"], "AGENTS.md changed after reload: reload again")
+age(fc.AGENTS_FILE, 1000)
+with open(fc.RELOAD_STAMP, "w") as f:
+    f.write("1")
+ok(fc.service_mode(oc, work) is None and oc_calls() == ["reload"], "stamp of another process is ignored")
+os.remove(fc.RELOAD_STAMP)
+open(f"{tmp}/reload-fails", "w").close()
+ok(fc.service_mode(oc, work) is None and oc_calls() == ["reload", "service restart"], "failed reload falls back to restart")
+ok(not os.path.exists(fc.RELOAD_STAMP), "failed reload leaves no stamp")
+os.remove(f"{tmp}/reload-fails")
+active["data"] = {"ses_1": {}}
+why = fc.service_mode(oc, work)
+ok(isinstance(why, str) and "liczy" in why and oc_calls() == [], "busy service is left alone")
+active["data"] = {}
+service(svc_env)
+age(cfg, 1000)
+ok(fc.service_mode(oc, work) is None and oc_calls() == ["service restart"], "config from service env: restart, not reload")
+svc.kill()
+svc_env.kill()
+httpd.shutdown()
 
 print(f"freecode: {checks} checks " + ("OK" if not fails else f"— {fails} FAILED"))
 sys.exit(1 if fails else 0)

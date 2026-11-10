@@ -19,8 +19,11 @@ Dlaczego: opencode 2.x bez poprawnej konfiguracji (brak pliku, uszkodzony JSON, 
 `small_model`) po cichu wysyła rozmowę do darmowych modeli w chmurze. freecode przed każdym startem
 sprawdza wszystkie źródła konfiguracji i odmawia startu, jeśli którykolwiek dostawca nie jest lokalny.
 Odmawia też przy `share: auto`, nielokalnym `enterprise.url`, zdalnym serwerze MCP i nadpisanym adresie modelu.
+Nie przekazuje do opencode poleceń, które wychodzą do sieci albo wystawiają serwer: `upgrade`, `auth`, `acp`,
+`service`, `uninstall`, `plugin add/check/update`, `mcp auth`, `pair --remote`, nielokalne `--server` i `session import URL`.
 TUI idzie przez usługę w tle (ta sama sesja w terminalu i w przeglądarce/telefonie). Usługa trzyma
-konfigurację z chwili swojego startu, więc gdy plik konfiguracji jest nowszy, freecode ją restartuje,
+konfigurację z chwili swojego startu, więc gdy plik konfiguracji jest nowszy, freecode każe jej wczytać
+ją ponownie (`opencode reload`, bez restartu; restart tylko gdy reload się nie uda),
 a jeśli usługa właśnie liczy sesję, startuje prywatny serwer (`--standalone`). `run` zawsze idzie
 z `--standalone`. Autoaktualizacja i pobieranie listy modeli są wyłączone.
 
@@ -745,6 +748,7 @@ def configure(stages="1234"):
 
 # ── usługa w tle (TUI) ───────────────────────────────────────────────────────────────────────
 SERVICE_JSON = os.path.join(HOME, ".local", "state", "opencode", "service.json")
+RELOAD_STAMP = os.path.join(FC_DIR, "service-reloaded")   # pid usługi; mtime = kiedy ostatnio wczytała konfigurację
 
 
 def proc_start(pid):
@@ -761,8 +765,10 @@ def service_mode(oc, directory):
     """Czy TUI może iść przez usługę w tle (jeden serwer dla terminala i telefonu).
 
     Zwraca None (tak) albo powód, dla którego trzeba użyć `--standalone`. Usługa trzyma konfigurację
-    z chwili swojego startu: gdy którykolwiek plik konfiguracji jest nowszy, a usługa nic nie liczy,
-    restartujemy ją; gdy coś liczy (np. sesja z telefonu), nie przerywamy jej i startujemy prywatny serwer.
+    z chwili swojego startu albo ostatniego `opencode reload`: gdy którykolwiek plik konfiguracji jest
+    nowszy, a usługa nic nie liczy, każemy jej wczytać konfigurację ponownie (`opencode reload` — ten sam
+    proces, sesje zostają); restart tylko wtedy, gdy reload się nie uda albo usługa ma konfigurację ze
+    zmiennych środowiska. Gdy coś liczy (np. sesja z telefonu), nie ruszamy jej i startujemy prywatny serwer.
     """
     if os.environ.get("FREECODE_STANDALONE"):
         return "FREECODE_STANDALONE"
@@ -778,6 +784,11 @@ def service_mode(oc, directory):
     started = proc_start(pid)
     if started is None:
         return None
+    try:                                 # znacznik liczy się tylko dla tego samego procesu usługi
+        if int(open(RELOAD_STAMP).read().strip()) == pid:
+            started = max(started, os.path.getmtime(RELOAD_STAMP))
+    except (OSError, ValueError):
+        pass
     reasons = []
     try:
         env = dict(l.split("=", 1) for l in open(f"/proc/{pid}/environ").read().split("\0") if "=" in l)
@@ -785,6 +796,7 @@ def service_mode(oc, directory):
                                                 "XDG_CONFIG_HOME") if env.get(k)]
     except OSError:
         reasons.append("nie da się odczytać środowiska usługi")
+    need_restart = bool(reasons)         # środowiska procesu reload nie zmieni
     reasons += [f"{p} zmieniony po starcie usługi" for p, content in sources(directory)
                 if content is None and os.path.getmtime(p) > started]
     prompts_dir = os.path.join(OC_DIR, "prompts")   # reguły i prompty usługa też czyta tylko przy starcie
@@ -805,6 +817,23 @@ def service_mode(oc, directory):
         busy = True
     if busy:
         return "usługa ma nieaktualną konfigurację (" + "; ".join(reasons) + ") i liczy sesję — nie przerywam jej"
+    if not need_restart:
+        t0 = time.time()                 # zmiana pliku w trakcie reloadu ma być widoczna następnym razem
+        info(color(2, "freecode: usługa w tle wczytuje konfigurację ponownie (" + "; ".join(reasons) + ")"))
+        try:
+            r = subprocess.run([oc, "reload"], capture_output=True, text=True, timeout=60)
+            ok = r.returncode == 0
+        except (OSError, subprocess.SubprocessError):
+            ok = False
+        if ok:
+            try:
+                os.makedirs(FC_DIR, exist_ok=True)
+                with open(RELOAD_STAMP, "w") as f:
+                    f.write(str(pid))
+                os.utime(RELOAD_STAMP, (t0, t0))
+            except OSError:
+                pass
+            return None
     info(color(2, "freecode: restart usługi w tle (" + "; ".join(reasons) + ")"))
     r = subprocess.run([oc, "service", "restart"], capture_output=True, text=True, timeout=60)
     if r.returncode != 0:
@@ -864,12 +893,45 @@ def refresh_env(directory):
             pass
 
 
+def refusal(argv):
+    """Powód, dla którego freecode nie przekaże polecenia do opencode (sieć, wystawienie serwera); None = wolno."""
+    for i, a in enumerate(argv):         # `--server URL` omija usługę i kontrolę configu — tylko lokalny adres
+        url = a.split("=", 1)[1] if a.startswith("--server=") else argv[i + 1] if a == "--server" and i + 1 < len(argv) else None
+        if url and not is_local(url):
+            return f"`--server {url}`: adres nie jest lokalny (własny host dopisz do FREECODE_HOSTS)"
+    words = [a for a in argv if not a.startswith("-")]
+    sub, sub2 = (words + [None, None])[:2]
+    if sub in ("upgrade", "update", "auth", "service", "acp"):
+        return f"`{sub}` łączy się z siecią albo z usługą w tle"
+    if sub == "uninstall":
+        return "`uninstall` usuwa opencode"
+    if sub == "plugin" and sub2 in ("add", "check", "update"):
+        return f"`plugin {sub2}` pobiera pakiety z sieci"
+    if sub == "mcp" and sub2 == "auth":
+        return "`mcp auth` loguje do zdalnego serwera MCP"
+    if sub == "pair":
+        if "--remote" in argv:
+            return "`pair --remote` wystawia serwer do internetu"
+        for i, a in enumerate(argv):
+            url = a.split("=", 1)[1] if a.startswith("--url=") else argv[i + 1] if a == "--url" and i + 1 < len(argv) else None
+            if url and not is_local(url):
+                return f"`pair --url {url}`: adres nie jest lokalny"
+    if sub == "session" and sub2 == "import":
+        src = words[2] if len(words) > 2 else ""
+        if "://" in src and not is_local(src):
+            return f"`session import {src}`: adres nie jest lokalny"
+    return None
+
+
 def launch_args(oc, argv, directory):
     """Polecenie opencode: TUI przez usługę albo prywatny serwer, `run` zawsze standalone. None = odmowa."""
     os.environ["OPENCODE_DISABLE_AUTOUPDATE"] = "1"
     os.environ["OPENCODE_DISABLE_MODELS_FETCH"] = "1"
     info(color(2, describe(oc)))
     sub = argv[0] if argv and not argv[0].startswith("-") and not os.path.isdir(argv[0]) else None
+    why = refusal(argv)
+    if why:
+        info(f"freecode: {why} — użyj zwykłego opencode"); return None
     if sub is None:                       # TUI
         own = "--standalone" in argv or any(a == "--server" or a.startswith("--server=") for a in argv)
         why = None if own else service_mode(oc, directory)
@@ -880,8 +942,6 @@ def launch_args(oc, argv, directory):
             args = [oc, "--standalone", *argv]
     elif sub == "run":
         args = [oc, "run", "--standalone", *argv[1:]]
-    elif sub in ("upgrade", "update", "auth", "service", "acp"):
-        info(f"freecode: `{sub}` łączy się z siecią albo z usługą w tle — użyj zwykłego opencode"); return None
     else:
         args = [oc, *argv]
     if os.environ.get("WEZTERM_PANE") and sys.stdout.isatty():
