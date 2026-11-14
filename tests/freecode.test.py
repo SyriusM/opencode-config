@@ -168,6 +168,26 @@ ok(len(problems({"share": "auto", "enterprise": {"url": "https://corp.example.co
                 provider={"models": {"m1": {"provider": {"api": "https://api.example.com/v1"}}}})) == 4,
    "all four leaks reported together")
 
+# model id must exist in provider.<pid>.models (krok 1)
+ok(flagged("nie istnieje w `provider.local.models`", extra={"model": "local/m2", "small_model": "local/m1"}),
+        "model missing from provider.models flagged")
+ok(problems(extra={"model": "local/m2", "small_model": "local/m2"},
+            provider={"models": {"m1": {}, "m2": {}}}) == [], "model present in provider.models passes")
+ok(problems(extra={"model": "local/Qwen/Qwen3.6-35B-A3B", "small_model": "local/m1"},
+            provider={"models": {"m1": {}, "Qwen/Qwen3.6-35B-A3B": {}}}) == [],
+        "model id with nested path passes (split on first /)")
+
+# npm plugins flagged; local paths and FREECODE_PLUGINS allowed (krok 2)
+ok(flagged("jest z npm (pobierana z sieci)", extra={"plugin": ["@knikolov/opencode-plugin-simple-memory"]}),
+        "npm plugin flagged")
+ok(flagged("jest z npm (pobierana z sieci)", extra={"plugin": ["@scope/name@1.2"]}),
+        "npm plugin with version flagged")
+ok(problems(extra={"plugin": ["/abs/path.js", "./rel.js", "../up.js", "~/home.js", "file:///x.js"]}) == [],
+        "local plugin paths pass")
+os.environ["FREECODE_PLUGINS"] = "@scope/name"
+ok(fc.check(work)[0] == [], "FREECODE_PLUGINS allows npm package")
+os.environ.pop("FREECODE_PLUGINS")
+
 # MCP entries merge across files: a project file must not hide a remote server from the global one
 os.environ.pop("OPENCODE_DISABLE_PROJECT_CONFIG")
 problems({"mcp": {"x": remote}})

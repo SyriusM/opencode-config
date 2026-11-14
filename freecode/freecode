@@ -52,6 +52,7 @@ FC_DIR = os.path.join(XDG, "freecode")
 MARKER = os.path.join(FC_DIR, "configured")
 OLD_MARKER = os.path.join(FC_DIR, "skonfigurowane")  # before 2026-10-21
 ENV_STAMP = os.path.join(FC_DIR, "env-checked")     # kiedy ostatnio sprawdzono opis komputera
+AUDIT_LOG = os.path.join(FC_DIR, "audit.log")       # odmowy startu: JSON, jedna linia na zdarzenie
 CONFIG_NAMES = ("opencode.jsonc", "opencode.json", "config.json")
 # standardowe porty lokalnych serwerów modeli
 SERVERS = [("llama.cpp", 8080), ("Ollama", 11434), ("LM Studio", 1234), ("vLLM", 8000)]
@@ -212,6 +213,10 @@ def check(directory="."):
                             + (" (small_model służy m.in. do tytułów sesji)" if name == "small_model" else ""))
         elif provider_of(m) not in enabled:
             problems.append(f"`{name}` = {m}: dostawca spoza `enabled_providers`")
+        else:
+            models_map = (providers.get(provider_of(m)) or {}).get("models")
+            if isinstance(models_map, dict) and m.split("/", 1)[1] not in models_map:
+                problems.append(f"`{name}` = {m}: model `{m.split('/', 1)[1]}` nie istnieje w `provider.{provider_of(m)}.models`")
     # inne drogi, którymi treść sesji wychodzi z komputera
     if merged.get("share") == "auto" or merged.get("autoshare") is True:
         problems.append("`share` = auto — sesje byłyby automatycznie udostępniane w sieci (ustaw \"disabled\" albo \"manual\")")
@@ -222,6 +227,18 @@ def check(directory="."):
         if m.get("type") == "remote" and m.get("enabled") is not False and not is_local(str(m.get("url") or "")):
             problems.append(f"serwer MCP `{name}` jest zdalny ({m.get('url')}); wyłącz go (\"enabled\": false) "
                             "albo dodaj host do FREECODE_HOSTS")
+    # wtyczki: lokalne ścieżki są OK, npm package to pobieranie z sieci
+    plugin_entries = merged.get("plugin")
+    if isinstance(plugin_entries, list):
+        allowed = [n.strip() for n in os.environ.get("FREECODE_PLUGINS", "").split(",") if n.strip()]
+        for p in plugin_entries:
+            if not isinstance(p, str) or p.startswith(("/", "./", "../", "~", "file://")):
+                continue
+            at = p.rfind("@")
+            pkg = p[:at] if at > 0 else p
+            if pkg in allowed:
+                continue
+            problems.append(f"wtyczka `{p}` jest z npm (pobierana z sieci); dodaj ją do FREECODE_PLUGINS albo usuń z `plugin`")
     return problems, merged, files[0][0]
 
 
@@ -876,6 +893,19 @@ def guard(directory):
         for p in problems:
             info(f"  - {p}")
         info("Popraw konfigurację albo uruchom: freecode --configure")
+        # log odmowy startu: jedna linia JSON, tylko gdy problems nie jest puste
+        entry = {
+            "time": time.strftime("%Y-%m-%dT%H:%M:%S%z", time.localtime()),
+            "cwd": directory,
+            "argv": sys.argv[1:],
+            "problems": problems,
+        }
+        try:
+            os.makedirs(FC_DIR, exist_ok=True)
+            with open(AUDIT_LOG, "a", encoding="utf-8") as f:
+                f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        except OSError:
+            pass
     return not problems
 
 
