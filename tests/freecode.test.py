@@ -17,6 +17,12 @@ SRC = sys.argv[1] if len(sys.argv) > 1 else os.path.join(HERE, "..", "freecode",
 tmp = tempfile.mkdtemp()
 os.environ.update(HOME=tmp, XDG_CONFIG_HOME=f"{tmp}/cfg")
 os.environ.pop("OPENCODE_CONFIG_DIR", None)
+# The host shell may carry FREECODE_PLUGINS / FREECODE_HOSTS (e.g. a
+# user's default npm plugin or a trusted host list). The checks below
+# must run against pristine defaults, otherwise the "npm plugin flagged"
+# and "remote MCP" assertions depend on the developer's own environment.
+for name in ("FREECODE_PLUGINS", "FREECODE_HOSTS"):
+    os.environ.pop(name, None)
 sys.dont_write_bytecode = True
 loader = importlib.machinery.SourceFileLoader("freecode", SRC)
 spec = importlib.util.spec_from_loader("freecode", loader)
