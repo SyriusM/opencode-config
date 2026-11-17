@@ -513,6 +513,15 @@ const MISSING_FILE = /No such file or directory|Nie ma takiego pliku/i
 export function isMissingTarget(cmd: string, msg: string): boolean {
   return MUTATING_CMD.test(cmd) && MISSING_FILE.test(msg)
 }
+// łańcuch && + pusty wynik + kod błędu ≠ 0/1/124 = ciche niepowodzenie (np. brak pliku lub 2>/dev/null);
+// wyjątek exit 3 + systemctl = normalne „inactive” (nie jest cichym niepowodzeniem)
+export function isSilentChainFailure(cmd: string, exit: unknown, msg: string): boolean {
+  return !msg.trim()
+    && typeof exit === "number"
+    && exit !== 0 && exit !== 1 && exit !== 124
+    && / && /.test(cmd)
+    && !(exit === 3 && /systemctl/.test(cmd))
+}
 // Błąd składni basha (niedomknięty cudzysłów, pętla bez done) = komenda w ogóle nie ruszyła.
 // 10-24 Bonsai 5× na długich jednolinijkowcach z zagnieżdżonymi cudzysłowami i heredokami.
 const SHELL_SYNTAX = /nieoczekiwany EOF podczas poszukiwania pasującego|niespodziewany koniec pliku|unexpected EOF while looking for matching|syntax error: unexpected end of file/i
@@ -584,6 +593,117 @@ function enablesRepair(tool: string, input: any): boolean {
   return false
 }
 
+// ── PODOBNE NAZWY (od 2026-11-12) ────────────────────────────────────────────────────────────────
+// Model przekręca identyfikatory przy przepisywaniu (TtsEngine→TssEngine, Bonsai 27B / Qwen 35B, KV q4_0).
+// write/edit: nazwa CamelCase z nowej treści, której nie ma w projekcie, a jest nazwa różna o 1 znak → „czy chodziło o”.
+// shell sed s/X/…/: X nie występuje w projekcie, a podobna nazwa tak → nie zamieniaj (model „naprawia” poprawne miejsca).
+const IDENT_RE = /\b[A-Za-z_][A-Za-z0-9_]*[A-Z][A-Za-z0-9_]*\b/g
+const CODE_EXT = /\.(kt|kts|java|ts|tsx|js|mjs|py|rs|go|c|h|cpp|hpp|cs|swift|xml|gradle|json|toml|ya?ml|sh|lua)$/i
+const identCache = new Map<string, { time: number; counts: Map<string, number> }>()
+export function projectRoot(fp: string): string | undefined {
+  let d = resolve(fp.replace(/^~(?=\/)/, HOME))
+  for (let i = 0; i < 12 && d.length > HOME.length; i++) {
+    const up = resolve(d, "..")
+    if (existsSync(join(d, ".git")) || existsSync(join(d, "settings.gradle.kts")) || existsSync(join(d, "package.json"))) return d
+    if (up === d) break
+    d = up
+  }
+  // bez repo: sam katalog pliku (np. ~/oc-audyt, ~/bin), ale nie katalog domowy i nie /tmp
+  const dir = resolve(fp.replace(/^~(?=\/)/, HOME), existsSync(fp) && !/\.[A-Za-z0-9]+$/.test(fp) ? "." : "..")
+  return dir.startsWith(HOME + "/") ? dir : undefined
+}
+export function projectIdents(root: string): Map<string, number> {
+  const c = identCache.get(root)
+  if (c && Date.now() - c.time < 30_000) return c.counts
+  const counts = new Map<string, number>()
+  let files = 0
+  const walk = (dir: string, depth: number) => {
+    if (depth > 12 || files > 3000) return
+    let ents: any[] = []
+    try { ents = readdirSync(dir, { withFileTypes: true }) } catch { return }
+    for (const e of ents) {
+      if (e.name.startsWith(".") || /^(node_modules|build|dist|target|out|venv|\.gradle|jniLibs|assets)$/.test(e.name)) continue
+      const f = join(dir, e.name)
+      if (e.isDirectory()) walk(f, depth + 1)
+      else if (CODE_EXT.test(e.name) && files++ < 3000) {
+        for (const id of [basename(e.name).replace(/\.[^.]+$/, "")]) counts.set(id, (counts.get(id) ?? 0) + 1)
+        try {
+          const t = readFileSync(f, "utf8")
+          if (t.length > 400_000) continue
+          for (const id of t.match(IDENT_RE) ?? []) counts.set(id, (counts.get(id) ?? 0) + 1)
+        } catch {}
+      }
+    }
+  }
+  walk(root, 0)
+  if (identCache.size > 20) identCache.clear()
+  identCache.set(root, { time: Date.now(), counts })
+  return counts
+}
+// odległość edycyjna ≤ 1 (zamiana, wstawienie, usunięcie albo przestawienie sąsiednich znaków)
+export function within1(a: string, b: string): boolean {
+  if (a === b) return false
+  const la = a.length, lb = b.length
+  if (Math.abs(la - lb) > 1) return false
+  let i = 0
+  while (i < la && i < lb && a[i] === b[i]) i++
+  if (la === lb) {
+    if (a.slice(i + 1) === b.slice(i + 1)) return true
+    return a[i] === b[i + 1] && a[i + 1] === b[i] && a.slice(i + 2) === b.slice(i + 2)
+  }
+  return la > lb ? a.slice(i + 1) === b.slice(i) : a.slice(i) === b.slice(i + 1)
+}
+export function nearMisses(text: string, counts: Map<string, number>, max = 3): { bad: string; good: string; n: number }[] {
+  const out: { bad: string; good: string; n: number }[] = []
+  const seenIds = new Set<string>()
+  for (const id of text.match(IDENT_RE) ?? []) {
+    // STAŁE_WIELKIMI (PASSED/PAUSED) to zwykle słowa, nie przekręcone nazwy
+    if (id.length < 6 || seenIds.has(id) || counts.has(id) || !/[a-z]/.test(id)) continue
+    seenIds.add(id)
+    let best: { good: string; n: number } | undefined
+    for (const [k, n] of counts) {
+      if (n < 2 || k.length < 6 || !within1(id, k)) continue
+      // liczba mnoga / dopisany znak na końcu to zwykle nowa nazwa, nie literówka
+      if (k + "s" === id || id + "s" === k) continue
+      if (!best || n > best.n) best = { good: k, n }
+    }
+    if (best) out.push({ bad: id, ...best })
+    if (out.length >= max) break
+  }
+  return out
+}
+export function similarNameHint(tool: string, input: any): { name: string; text: string } | undefined {
+  if (!input || typeof input !== "object") return undefined
+  if (tool === "write" || tool === "edit") {
+    const fp = input.filePath ?? input.path
+    const text = tool === "write" ? input.content : (input.newString ?? input.new_string)
+    if (typeof fp !== "string" || typeof text !== "string" || !CODE_EXT.test(fp)) return undefined
+    const root = projectRoot(fp)
+    if (!root) return undefined
+    const old = tool === "edit" ? String(input.oldString ?? input.old_string ?? "") : ""
+    const miss = nearMisses(text, projectIdents(root)).filter(m => !old.includes(m.bad))
+    if (!miss.length) return undefined
+    return { name: "similar-name", text: "w nowej treści są nazwy, których NIE MA w projekcie, a jest bardzo podobna: " +
+      miss.map(m => `${m.bad} → czy chodziło o ${m.good} (${m.n}× w projekcie)?`).join("; ") +
+      ". Nie przepisuj nazwy z pamięci: skopiuj ją z wyniku grep -rn i popraw plik." }
+  }
+  if (/^(shell|bash|fish)$/.test(tool) && typeof input.command === "string") {
+    const cmd: string = input.command
+    const m = /\bsed\b[^|;&]*?['"]s(.)([A-Za-z_][A-Za-z0-9_]{5,})\1/.exec(cmd)
+    if (!m) return undefined
+    const dirM = /(?:^|[;&]\s*)cd\s+("[^"]+"|'[^']+'|\S+)/.exec(cmd)
+    const base = typeof input.workdir === "string" ? input.workdir : dirM ? dirM[1].replace(/^["']|["']$/g, "") : ""
+    const root = base && (HOME_ABS_RE.test(base) || base.startsWith("~/")) ? projectRoot(base) : undefined
+    if (!root) return undefined
+    const counts = projectIdents(root)
+    if (counts.has(m[2])) return undefined
+    const miss = nearMisses(m[2], counts, 1)
+    if (!miss.length) return undefined
+    return { name: "similar-name", text: `sed ma zamienić ${m[2]}, a tej nazwy NIE MA w plikach projektu. Jest ${miss[0].good} (${miss[0].n}×) — prawdopodobnie poprawna, a różnicę widzisz tylko Ty. Sprawdź: grep -rn "${miss[0].good}" . | head. Nie zamieniaj niczego, zanim grep nie pokaże, że błędna nazwa naprawdę istnieje.` }
+  }
+  return undefined
+}
+
 function findHint(tool: string, input: any, repairMode = false): { name: string; text: string; always?: boolean } | undefined {
   try {
     if (!input || typeof input !== "object") return undefined
@@ -604,6 +724,8 @@ function findHint(tool: string, input: any, repairMode = false): { name: string;
         return { name: "guessed-path", text: 'Model zgaduje ścieżki (Projekt/Projekti/Pobrane/Pulpit) zamiast sprawdzić ls. Sprawdź najpierw: ls ~/Projekt* lub ls ~/Pobran* i użyj poprawnej ścieżki.' }
       }
     }
+    const sim = similarNameHint(tool, input)
+    if (sim) return sim
     if (repairMode) {
       if (tool === "execute" && typeof input.code === "string") {
         for (const w of HINTS_REPAIR_EXECUTE) if (w.re.test(input.code)) return { name: w.name, text: w.text, always: true }
@@ -980,6 +1102,12 @@ export default {
         // grep/rg/diff/test z exit 1 i bez wyjścia = „nic nie znaleziono”, nie błąd — nie liczymy do pętli
         const cmd = typeof input.command === "string" ? input.command.trim() : ""
         if (res?.metadata?.exit === 1 && !msg.trim() && /^(grep|rg|diff|test|\[)\s/.test(cmd)) return
+        // pusty wynik + exit≠0,1,124 + łańcuch && = ciche niepowodzenie; dokładaj wskazówkę
+        // wyjątki: exit 124 (timeout, nie jest cichym niepowodzeniem) oraz exit 3 + systemctl
+        if (isSilentChainFailure(cmd, res?.metadata?.exit, msg)) {
+          appendToError(ev, "\nWSKAZÓWKA: wynik pusty, kod błędu " + res.metadata.exit + " — łańcuch && padł cicho (np. pliku nie ma albo 2>/dev/null zagrał). Sprawdź każdy etap osobno bez 2>/dev/null.")
+          log(`HINT-no-output-chain shell exit=${res.metadata.exit} session=${ev.sessionID}`)
+        }
         const prev = b.get(key)
         b.set(key, { n: (prev?.n ?? 0) + 1, msg: msg || prev?.msg || "?" })
         if (tool === "edit" && msg.includes("Could not find oldString")) {
