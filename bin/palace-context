@@ -67,8 +67,8 @@ sys.stdout, _out = open(os.devnull, "w"), sys.stdout  # mempalace prints telemet
 try:
     from mempalace import mcp_server as m
     rel = str(directory.relative_to(home))
-    # query stays Polish: the palace notes are mostly Polish (bge-m3 is multilingual anyway)
-    query = f"{directory.name} — projekt w ~/{rel}: stan, decyzje, problemy"
+    # English query: default chromadb embeddings are English-only; bge-m3 still matches Polish notes
+    query = f"{directory.name} — project in ~/{rel}: status, decisions, problems"
     r = m.tool_search(query, limit=30)
     results = r.get("results", []) if isinstance(r, dict) else []
 except Exception as e:  # noqa: BLE001
