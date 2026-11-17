@@ -44,6 +44,8 @@ Small question (one fact, one command) → skip options and plan, just answer. T
 ## Tools
 - `shell`: exit 1 from `grep`/`pgrep`/`diff` or exit 2 from `ls` = no matches — that is the result, not an error.
 - `read` "File not found" → `ls` the directory; don't guess paths.
+- "Permission denied" (shell/edit/write) = a DELIBERATE block by the agent's rules, not a glitch. Do NOT retry variants (`cp` → `cat >` → `echo >`). Stop, tell the user which command was blocked, and either put that step in the brief/plan for the agent that may do it, or ask.
+- Writing a brief/plan file: create it DIRECTLY at its final path with the write tool (e.g. `~/.prompty/NAME.md`). No scratch copy in `~/tmp-opencode/` or elsewhere, no `cp`/`mv` afterwards — in Plan mode only the target path is writable.
 - "No tool named X" = the tool does not exist, don't repeat.
 - `question`: one short question.
 
