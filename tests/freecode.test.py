@@ -249,7 +249,7 @@ oc = os.path.join(tmp, "fake-opencode")
 with open(oc, "w") as f:
     f.write(f'#!/bin/sh\necho "$*" >> {calls}\n[ "$1" = reload ] && [ -e {tmp}/reload-fails ] && exit 1\nexit 0\n')
 os.chmod(oc, 0o755)
-clean = {"PATH": os.environ["PATH"]}
+clean = {"PATH": os.environ["PATH"], "OPENCODE_DISABLE_AUTOUPDATE": "1", "OPENCODE_DISABLE_MODELS_FETCH": "1"}
 svc = subprocess.Popen(["sleep", "60"], env=clean)
 svc_env = subprocess.Popen(["sleep", "60"], env=dict(clean, OPENCODE_CONFIG="/x.json"))
 
@@ -299,6 +299,15 @@ age(cfg, 1000)
 ok(fc.service_mode(oc, work) is None and oc_calls() == ["service restart"], "config from service env: restart, not reload")
 svc.kill()
 svc_env.kill()
+svc_no_flags = subprocess.Popen(["sleep", "60"], env={"PATH": os.environ["PATH"]})
+service(svc_no_flags)
+try:
+    why = fc.service_mode(oc, work)
+    ok(isinstance(why, str) and "OPENCODE_DISABLE_AUTOUPDATE" in why
+       and "OPENCODE_DISABLE_MODELS_FETCH" in why and oc_calls() == [],
+       "missing flags: reason names both vars, no reload/restart")
+finally:
+    svc_no_flags.kill()
 httpd.shutdown()
 
 print(f"freecode: {checks} checks " + ("OK" if not fails else f"— {fails} FAILED"))

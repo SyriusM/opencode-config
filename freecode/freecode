@@ -809,8 +809,14 @@ def service_mode(oc, directory):
     except (OSError, ValueError):
         pass
     reasons = []
+    missing = []
     try:
         env = dict(l.split("=", 1) for l in open(f"/proc/{pid}/environ").read().split("\0") if "=" in l)
+        for k in ("OPENCODE_DISABLE_AUTOUPDATE", "OPENCODE_DISABLE_MODELS_FETCH"):
+            if env.get(k) != "1":
+                missing.append(k)
+        if missing:
+            return "usługa nie ma flag anty-network: " + ", ".join(missing)
         reasons += [f"usługa ma {k}" for k in ("OPENCODE_CONFIG", "OPENCODE_CONFIG_CONTENT", "OPENCODE_CONFIG_DIR",
                                                 "XDG_CONFIG_HOME") if env.get(k)]
     except OSError:
