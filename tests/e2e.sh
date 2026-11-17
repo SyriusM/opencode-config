@@ -34,14 +34,14 @@ echo "== palace note for the session directory"
 PY="$(head -1 "$HOME/bin/palace-context" | sed 's/^#!//')"
 "$PY" -I -c "
 from mempalace import mcp_server as m
-m.tool_add_drawer(wing='projects', room='decisions', content='demo — project in ~/demo, PALACE-MARKER. DECISION: text files always in UTF-8, results rounded to 2 places.')" >/dev/null 2>&1
+m.tool_add_drawer(wing='projects', room='decisions', content='demo — project in ~/demo: status, decisions, problems. PALACE-MARKER.')" >/dev/null 2>&1
 
 echo "== freecode run session (2× read error, then an answer)"
 mkdir -p "$HOME/demo" && cd "$HOME/demo" || exit 1
 FREECODE_YES=1 timeout 120 freecode run "read the file does-not-exist.txt" > /tmp/oc-run.out 2>&1; RC=$?
 cd "$REPO" || exit 1
 L="$HOME/.mempalace/hook_state"
-check "freecode run kod 0" test "$RC" = 0
+check "freecode run exit 0" test "$RC" = 0
 check "mock answer arrived" grep -q "The end." /tmp/oc-run.out
 check "tool-input-fix loaded" grep -q "\] loaded" "$L/tool_input_fix.log"
 check "auto-backup loaded" grep -q "auto-backup loaded" "$L/tool_input_fix.log"
@@ -50,13 +50,13 @@ check "lesson-draft wrote a draft" grep -q "error pattern" "$HOME/tmp-opencode/l
 check "palace-context appended a note" grep -q "appended [0-9]* chars" "$L/palace_context.log"
 check "note reached the model" grep -q '"palace": true' /tmp/mock.log
 
-echo "== freecode odmawia przy uszkodzonym configu"
+echo "== freecode refuses a broken config"
 cp "$HOME/.config/opencode/opencode.json" /tmp/oc-ok.json
 echo '{"model":' > "$HOME/.config/opencode/opencode.json"
-check "freecode run odmawia" bash -c '! FREECODE_YES=1 freecode run x'
+check "freecode run refuses" bash -c '! FREECODE_YES=1 freecode run x'
 cp /tmp/oc-ok.json "$HOME/.config/opencode/opencode.json"
 
-echo "== deinstalacja"
+echo "== uninstall"
 "$REPO/install.sh" --uninstall >/dev/null
 check "freecode removed" test ! -e "$HOME/bin/freecode"
 check "plugins removed" test ! -e "$HOME/.config/opencode/plugins/lesson-draft/index.ts"
