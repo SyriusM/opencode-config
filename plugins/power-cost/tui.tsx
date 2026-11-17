@@ -95,7 +95,7 @@ const startedAt = Date.now()
 const [now, setNow] = createSignal(startedAt)
 const [tariff, setTariff] = createSignal<Tariff>(FALLBACK_TARIFF)
 
-// koszt = energia [Wh] * stawka [waluta/kWh] / 1000
+// cost = energy [Wh] * rate [currency/kWh] / 1000
 const cost = () => (energyWh() * tariff().perKwh) / 1000
 // cost of an hour at the current draw
 const costPerHour = () => ((gpu()?.watts ?? 0) * tariff().perKwh) / 1000
@@ -165,7 +165,9 @@ function startMetering() {
   }
 }
 
-const pl = (value: number, digits: number) => value.toFixed(digits).replace(".", ",")
+// number in the system locale (61,0 in Polish, 61.0 in English)
+const pl = (value: number, digits: number) =>
+  value.toLocaleString(undefined, { minimumFractionDigits: digits, maximumFractionDigits: digits, useGrouping: false })
 const gb = (mib: number) => pl(mib / 1024, 1)
 
 function uptime() {
@@ -199,12 +201,12 @@ function speedText() {
   const s = speed()
   if (s) {
     return s.phase === "GEN"
-      ? `generuje ${pl(s.tps, 1)} tok/s (${s.done} tok)`
-      : `czyta prompt ${pl(s.tps, 0)} tok/s (${s.done}/${s.total ?? "?"})`
+      ? `generating ${pl(s.tps, 1)} tok/s (${s.done} tok)`
+      : `reading prompt ${pl(s.tps, 0)} tok/s (${s.done}/${s.total ?? "?"})`
   }
   const l = lastSpeed()
-  if (!l) return "tok/s: bezczynny"
-  return `bezczynny · ostatnio ${l.phase === "GEN" ? "gen." : "prompt"} ${pl(l.tps, l.phase === "GEN" ? 1 : 0)} tok/s`
+  if (!l) return "tok/s: idle"
+  return `idle · last ${l.phase === "GEN" ? "gen." : "prompt"} ${pl(l.tps, l.phase === "GEN" ? 1 : 0)} tok/s`
 }
 
 function SidebarSection() {
@@ -225,7 +227,7 @@ function SidebarSection() {
             </text>
             <text fg={tempColor(theme, sample().tempC)}>
               {pl(sample().tempC, 0)}°C
-              {sample().fanPct != null ? ` · went. ${pl(sample().fanPct!, 0)}%` : ""}
+              {sample().fanPct != null ? ` · fan ${pl(sample().fanPct!, 0)}%` : ""}
             </text>
             <text fg={theme.text.muted}>
               VRAM {gb(sample().vramUsedMiB)} / {gb(sample().vramTotalMiB)} GB
@@ -240,7 +242,7 @@ function SidebarSection() {
         {pl(costPerHour(), 3)} {tariff().currency}/h now · since {uptime()}
       </text>
       <text fg={theme.text.muted}>
-        stawka {pl(tariff().perKwh, 4)} {tariff().currency}/kWh ({tariff().source})
+        rate {pl(tariff().perKwh, 4)} {tariff().currency}/kWh ({tariff().source})
       </text>
     </box>
   )
