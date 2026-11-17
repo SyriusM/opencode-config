@@ -34,7 +34,7 @@ echo "== palace note for the session directory"
 PY="$(head -1 "$HOME/bin/palace-context" | sed 's/^#!//')"
 "$PY" -I -c "
 from mempalace import mcp_server as m
-m.tool_add_drawer(wing='projects', room='decisions', content='demo — project in ~/demo: status, decisions, problems. PALACE-MARKER.')" >/dev/null 2>&1
+m.tool_add_drawer(wing='projects', room='decisions', content='demo — project in ~/demo, PALACE-MARKER. DECISION: text files always in UTF-8, results rounded to 2 places.')" >/dev/null 2>&1
 
 echo "== freecode run session (2× read error, then an answer)"
 mkdir -p "$HOME/demo" && cd "$HOME/demo" || exit 1

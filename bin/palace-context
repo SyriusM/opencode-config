@@ -12,7 +12,6 @@ import socket
 import sys
 from pathlib import Path
 
-THRESHOLD = 0.57          # minimum similarity (bge-m3); below that is noise
 MAX_RESULTS = 3
 MAX_CHARS = 350     # per result
 
@@ -35,6 +34,11 @@ K = read_config()
 PORT = int(K.get("PALACE_EMBED_PORT", "0") or 0)
 # ONLY these wings (no diaries, chats or personal matters — the model has a browser and forms); "*" = all
 _w = K.get("PALACE_WINGS", "*")
+# minimum similarity. bge-m3 (embedding server): 0.57, below is noise. The default chromadb model
+# (MiniLM, English-only) scores related notes ~0.34-0.38 and unrelated ones up to ~0.32, so there the
+# bar is lower AND the note must name the project directory. PALACE_THRESHOLD overrides.
+NAME_REQUIRED = not PORT
+THRESHOLD = float(K.get("PALACE_THRESHOLD") or (0.57 if PORT else 0.30))
 ALLOWED_WINGS = None if _w.strip() == "*" else {x.strip() for x in _w.split(",") if x.strip()}
 MEMPALACE_SRC = os.path.expanduser(K.get("MEMPALACE_SRC", "~/mempalace"))
 debug = "--debug" in sys.argv
@@ -87,7 +91,8 @@ def is_noise(w: dict) -> bool:
             or len(text) < 80 or text.startswith("[tool:"))
 
 
-selected = [w for w in results if w.get("similarity", 0) >= THRESHOLD and not is_noise(w)][:MAX_RESULTS]
+selected = [w for w in results if w.get("similarity", 0) >= THRESHOLD and not is_noise(w)
+            and (not NAME_REQUIRED or directory.name.lower() in str(w.get("text", "")).lower())][:MAX_RESULTS]
 if debug:
     for w in results:
         print(f"# {w.get('similarity')} {w.get('wing')}/{w.get('room')} {w.get('topic')}", file=sys.stderr)
