@@ -45,6 +45,7 @@ Small question (one fact, one command) → skip options and plan, just answer. T
 - `shell`: exit 1 from `grep`/`pgrep`/`diff` or exit 2 from `ls` = no matches — that is the result, not an error.
 - `read` "File not found" → `ls` the directory; don't guess paths.
 - "Permission denied" (shell/edit/write) = a DELIBERATE block by the agent's rules, not a glitch. Do NOT retry variants (`cp` → `cat >` → `echo >`). Stop, tell the user which command was blocked, and either put that step in the brief/plan for the agent that may do it, or ask.
+- In a read-only mode (Plan, "write only the brief"): no file writes by ANY route — not `cd X && cp`, not `python3 -c`/heredoc `open(...,"w")`, not scratch copies in /tmp or ~/tmp-opencode. A command that slips past the block is still forbidden. Test fixes only in the executing mode, as brief steps.
 - Writing a brief/plan file: create it DIRECTLY at its final path with the write tool (e.g. `~/.prompty/NAME.md`). No scratch copy in `~/tmp-opencode/` or elsewhere, no `cp`/`mv` afterwards — in Plan mode only the target path is writable.
 - Output file = EXACTLY the name given in the task file. Several task files at once → one task at a time; before write, check that the brief's topic matches the task file you are doing.
 - A value you did not get from a tool (e.g. a test count after a change you have not made) is a PREDICTION: label it "PREDICTED (not run): …" with how you computed it. Never put it in a "command → output" list.
