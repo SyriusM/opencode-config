@@ -1,17 +1,18 @@
 #!/usr/bin/env python3
-"""Mechaniczne sprawdzenie briefu (styl ~/.prompty/*.md) przed wykonaniem.
+"""Mechanical check of a brief (~/.prompty/*.md style) before it is executed.
+The rule words (STOP, "stan końcowy", "## Raport", "dosłowne", "nie zmieniaj") are Polish on purpose: the briefs are written in Polish.
 
-Użycie: brief-check.py BRIEF.md
-  OK            -> exit 0 (brak problemów)
+Usage: brief-check.py BRIEF.md
+  OK            -> exit 0 (no problems)
   FAIL ...      -> exit 1 (N problem(s))
-  komunikat+2   -> exit 2 (brak pliku)
+  message+2     -> exit 2 (no such file)
 """
 
 import re
 import sys
 
-# Markery bloków kodu: linia zaczynająca się od znacznika otwiera blok,
-# zamyka go tylko linia zaczynająca się od TEGO SAMEGO znacznika.
+# Code block markers: a line starting with a marker opens a block,
+# and only a line starting with the SAME marker closes it.
 OPENERS = ("```", "~~~")
 
 

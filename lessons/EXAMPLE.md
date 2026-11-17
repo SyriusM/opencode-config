@@ -1,6 +1,6 @@
-# Błąd opencode i rozwiązanie (przykład)
+# opencode error and fix (example)
 
-OBJAW: Unknown tool 'webfetch.webfetch'
-PRZYCZYNA: wbudowane narzędzia woła się bezpośrednio, nie przez execute
-NAPRAWA: webfetch wywołuj jako osobne narzędzie, execute tylko dla tools.* serwerów MCP
-PRZYKŁAD: webfetch({url: "https://example.com"})
+SYMPTOM: Unknown tool 'webfetch.webfetch'
+CAUSE: built-in tools are called directly, not through execute
+FIX: call webfetch as a separate tool; execute is only for tools.* of MCP servers
+EXAMPLE: webfetch({url: "https://example.com"})

@@ -1,6 +1,6 @@
-# Błąd opencode i rozwiązanie (2026-10-07)
+# opencode error and fix (2026-10-07)
 
-OBJAW: ConnectionRefused Unable to connect przy zapytaniu do modelu, socket llama-qwen36-proxy w stanie failed (trigger-limit-hit)
-PRZYCZYNA: dwa modele wyrzucały się z VRAM (Conflicts=), usługa nie wstawała i socket wpadł w pętlę aktywacji
-NAPRAWA: systemctl --user reset-failed llama-qwen36-proxy.socket llama-qwen36.service; systemctl --user start llama-qwen36-proxy.socket; nie uruchamiać drugiego modelu w trakcie sesji
-PRZYKŁAD: systemctl --user is-active llama-qwen36-proxy.socket
+SYMPTOM: ConnectionRefused Unable to connect on a model request, socket llama-qwen36-proxy in state failed (trigger-limit-hit)
+CAUSE: two models evicted each other from VRAM (Conflicts=), the service did not start and the socket fell into an activation loop
+FIX: systemctl --user reset-failed llama-qwen36-proxy.socket llama-qwen36.service; systemctl --user start llama-qwen36-proxy.socket; do not start a second model during a session
+EXAMPLE: systemctl --user is-active llama-qwen36-proxy.socket

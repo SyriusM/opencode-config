@@ -1,6 +1,6 @@
-# Błąd opencode i rozwiązanie (2026-10-07)
+# opencode error and fix (2026-10-07)
 
-OBJAW: Klik: Timeout 5000ms exceeded, element is outside of the viewport
-PRZYCZYNA: wybrany ref to duplikat linku w ukrytym, wysuwanym menu (leży poza ekranem)
-NAPRAWA: wziąć inny ref z tym samym tekstem albo otworzyć jego href przez browser_navigate
-PRZYKŁAD: await tools.playwright.browser_navigate({url: "HREF_LINKU"})
+SYMPTOM: Click: Timeout 5000ms exceeded, element is outside of the viewport
+CAUSE: the chosen ref is a duplicate link in a hidden slide-out menu (it lies off screen)
+FIX: take another ref with the same text or open its href via browser_navigate
+EXAMPLE: await tools.playwright.browser_navigate({url: "LINK_HREF"})

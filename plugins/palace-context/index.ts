@@ -3,13 +3,13 @@ import { homedir } from "node:os"
 import { join } from "node:path"
 import { execFile } from "node:child_process"
 
-// PALACE-KONTEKST — dokleja do promptu systemowego krótkie tło z mempalace dla katalogu sesji
-// (najwyżej 3 notatki, ~1 KB) albo ostrzeżenie, że palace/embeddingi leżą. Tekst daje
-// ~/bin/palace-context (zmierzone ~0,7 s; wynik w pamięci podręcznej na katalog, 10 min).
+// PALACE-CONTEXT — appends to the system prompt a short background from mempalace for the session directory
+// (at most 3 notes, ~1 KB) or a warning that the palace/embeddings are down. The text comes from
+// ~/bin/palace-context (measured ~0.7 s; result cached per directory, 10 min).
 //
-// Hook V2: ctx.session.hook("context", cb) — tak robią wbudowane wtyczki opencode 2.0.24
-// (`i.system.push({type:"text", text})`). Tekst stały w obrębie katalogu → nie psuje cache promptu.
-// Nigdy nie rzucamy z hooka. Log: ~/.mempalace/hook_state/palace_kontekst.log
+// Hook V2: ctx.session.hook("context", cb) — as the built-in opencode 2.0.24 plugins do
+// (`i.system.push({type:"text", text})`). The text is constant per directory → it does not break the prompt cache.
+// We never throw from the hook. Log: ~/.mempalace/hook_state/palace_kontekst.log
 
 const HOME = homedir()
 const LOG = join(HOME, ".mempalace", "hook_state", "palace_context.log")
@@ -49,7 +49,7 @@ function fetchContext(dir: string): Promise<string> {
 export default {
   id: "palace-context",
   async setup(ctx: any) {
-    // V2: katalog sesji w ctx.location.directory (instancja wtyczki na lokalizację); cwd procesu to zwykle ~
+    // V2: the session directory is in ctx.location.directory (a plugin instance per location); the process cwd is usually ~
     const defaultDir = String(ctx?.location?.directory ?? process.cwd())
     log(`plugin-load ctx=[${Object.keys(ctx ?? {}).join(",")}] dir=${defaultDir}`)
     void fetchContext(defaultDir) // rozgrzanie, zanim padnie pierwsze pytanie
@@ -68,7 +68,7 @@ export default {
         }
         if (!Array.isArray(p?.system)) return
         const dir = defaultDir
-        // czekamy najwyżej 3 s; jak nie zdąży, kontekst dojdzie przy następnym wywołaniu
+        // we wait at most 3 s; if it is not ready, the context arrives with the next call
         const ctxText = await Promise.race([fetchContext(dir), new Promise<string>((r) => setTimeout(() => r(""), 3000))])
         if (ctxText) {
           p.system.push({ type: "text", text: ctxText })

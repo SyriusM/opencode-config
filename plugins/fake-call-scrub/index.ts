@@ -29,7 +29,7 @@ const BLOCK = new RegExp(
   "gi",
 )
 const FORCE_AGENTS = (process.env.FORCE_TOOL_AGENTS ?? "gemma_coder").split(",").map((a) => a.trim()).filter(Boolean)
-const MARK = "[komenda napisana tekstem — NIE została wykonana]"
+const MARK = "[command written as text — it was NOT run]"
 
 function log(line: string) {
   try {

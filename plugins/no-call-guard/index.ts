@@ -2,12 +2,12 @@ import { appendFileSync, existsSync, mkdirSync } from "node:fs"
 import { homedir } from "node:os"
 import { join } from "node:path"
 
-// NO-CALL-GUARD PLUGIN — wykrywa turę, w której model pokazał komendę RAZEM z „wyjściem”,
-// ale nie wywołał żadnego narzędzia (zmyślony wynik; 9B robi to w 01-verbatim / 06 / 15).
-// Domyślnie TYLKO loguje. Z NO_CALL_GUARD=act (runner treningowy) dopisuje do sesji notkę
-// session.synthetic, która wznawia pracę modelu. Notka NIE każe ślepo uruchamiać — jeśli
-// użytkownik pytał „jak”, model ma tylko przyznać, że nic nie uruchamiał (ryzyko `rm` z porady).
-// Druga reguła: pusta tura zaraz po wyniku narzędzia → notka „kontynuuj” (działa w każdym trybie, raz na prompt).
+// NO-CALL-GUARD PLUGIN — detects a turn in which the model showed a command TOGETHER with "output",
+// but did not call any tool (a made-up result; 9B does this in 01-verbatim / 06 / 15).
+// By default it ONLY logs. With NO_CALL_GUARD=act (training runner) it adds a
+// session.synthetic note to the session, which resumes the model. The note does NOT say to run blindly — if
+// the user asked "how", the model only has to admit it ran nothing (risk of `rm` from advice).
+// Second rule: an empty turn right after a tool result → a "continue" note (works in every mode, once per prompt).
 
 const HOME = homedir()
 const STATE_DIR = join(HOME, ".mempalace", "hook_state")
@@ -15,25 +15,25 @@ const DEBUG_LOG = join(STATE_DIR, "no_call_guard.log")
 const MODE = process.env.NO_CALL_GUARD === "act" ? "act" : "log"
 
 const NOTE =
-  "[no-call-guard] W tej turze nie wywołałeś żadnego narzędzia, a pokazałeś komendę (czasem z „wyjściem”) — " +
-  "komenda NIE została uruchomiona, a każde pokazane wyjście jest wymyślone. Jeśli użytkownik prosił o WYKONANIE: uruchom komendę WYWOŁANIEM narzędzia (tool call: bash, a w Code Mode `execute`) — " +
-  "tekst w bloku ``` albo napis typu shell(command=…) to NIE jest wywołanie — i podaj prawdziwy wynik. " +
-  "Jeśli prosił tylko o pokazanie, jak to zrobić: nie uruchamiaj niczego, tylko napisz wprost, że komenda nie była uruchamiana, " +
-  "a pokazane wyjście jest przykładowe."
+  "[no-call-guard] You called no tool in this turn, but you showed a command (sometimes with \"output\") — " +
+  "the command was NOT run, and any output shown is made up. If the user asked you to RUN it: run the command with a tool CALL (tool call: bash, in Code Mode `execute`) — " +
+  "text in a ``` block or a string like shell(command=…) is NOT a call — and give the real result. " +
+  "If they only asked how to do it: do not run anything, just say plainly that the command was not run, " +
+  "and the output shown is an example."
 
-// użytkownik wprost kazał coś zrobić -> bez furtki „to była tylko porada” (Gemma 4 none, 10-21: przyznała się
-// i zapytała „czy mam wykonać?” zamiast wywołać narzędzie)
+// the user explicitly asked for an action -> no "it was just advice" loophole (Gemma 4 none, 10-21: it admitted it
+// and asked "should I run it?" instead of calling the tool)
 const NOTE_DO =
-  "[no-call-guard] W tej turze nie wywołałeś żadnego narzędzia — komenda NIE została uruchomiona, a każde pokazane wyjście jest wymyślone. " +
-  "Użytkownik wprost polecił to WYKONAĆ. Wywołaj TERAZ narzędzie (tool call: shell/read/edit; w Code Mode `execute`) — " +
-  "tekst w bloku ```, `tools.shell(...)` czy `<shell .../>` w odpowiedzi to NIE jest wywołanie. Nie pytaj o zgodę, nie opisuj — wykonaj i podaj prawdziwy wynik. " +
-  "Jeśli wskazanego pliku/ścieżki nie ma — zgłoś to i NIC nie podmieniaj (nie ruszaj innego pliku o tej samej nazwie)."
+  "[no-call-guard] You called no tool in this turn — the command was NOT run, and any output shown is made up. " +
+  "The user explicitly asked you to DO it. Call the tool NOW (tool call: shell/read/edit; in Code Mode `execute`) — " +
+  "text in a ``` block, `tools.shell(...)` or `<shell .../>` in the reply is NOT a call. Do not ask for permission, do not describe — do it and give the real result. " +
+  "If the given file/path does not exist — report it and do NOT substitute ANYTHING (do not touch another file with the same name)."
 
 // empty turn right after a tool result (Qwen 35B, 10-21: first token = EOS, no text, the task just stops).
 // Acts in every mode: the note only says "continue", it can't make the model run anything new on its own.
 const NOTE_EMPTY =
-  "[no-call-guard] Twoja ostatnia odpowiedź była pusta — zaraz po wyniku narzędzia nic nie napisałeś i zadanie stanęło. " +
-  "Kontynuuj: jeśli zadanie nie jest skończone, wykonaj następny krok; jeśli jest skończone, podsumuj użytkownikowi wynik."
+  "[no-call-guard] Your last reply was empty — right after a tool result you wrote nothing and the task stalled. " +
+  "Continue: if the task is not finished, do the next step; if it is finished, summarize the result for the user."
 
 // pure function — tested without opencode
 export function isEmptyTurn(stepText: string, calls: number, finish: unknown): boolean {
@@ -86,20 +86,20 @@ export function noteFor(userText: string, assistantText = "", exists: (p: string
   const cmd = extractCommand(assistantText)
   const missing = missingFiles(userText, assistantText, exists)
   let note = cmd
-    ? base + ` Komenda, którą napisałeś tekstem: \`${cmd}\` — jeśli trzeba ją wykonać, wyślij ją DOKŁADNIE jako wywołanie narzędzia shell (w Code Mode \`execute\`).`
+    ? base + ` The command you wrote as text: \`${cmd}\` — if it has to be run, send it EXACTLY as a shell tool call (in Code Mode \`execute\`).`
     : base
   if (missing.length)
-    note += ` Te pliki zapisałeś tylko tekstem i NIE istnieją na dysku: ${missing.map((f) => `\`${f}\``).join(", ")} — ` +
-      "utwórz każdy z nich narzędziem write (w Code Mode `execute`), a potem sprawdź `ls`, że są."
+    note += ` You wrote these files only as text and they do NOT exist on disk: ${missing.map((f) => `\`${f}\``).join(", ")} — ` +
+      "create each of them with the write tool (in Code Mode `execute`), then check with `ls` that they exist."
   return note
 }
 
-const HANDOFF = /uruchom\s+r(ę|e)cznie/iu
+const HANDOFF = /uruchom\s+r(ę|e)cznie|run\s+manually/iu
 const SHELL_BLOCK = /```(?:bash|sh|shell|console|fish|zsh)\s*\n[\s\S]*?```/i
 const ANY_BLOCK = /```[^\n]*\n[\s\S]*?```/g
-// polecenie wykonania w prompcie (nie pytanie „jak …”)
-// granice słów przez \p{L}, bo \b w JS nie widzi polskich liter („sprawdź” na końcu słowa)
-const ACTION = /(?<!\p{L})(wykonaj|uruchom|odpal|sprawdź|sprawdz|przeczytaj|wyświetl|wyswietl|pokaż wynik|wklej|usuń|usun|zmień|zmien|popraw|edytuj|utwórz|utworz|stwórz|stworz|zapisz|skopiuj|przenieś|przenies|dodaj|zainstaluj|napraw|run|execute)(?!\p{L})/iu
+// an order to act in the prompt (not a "how …" question); Polish and English verbs
+// word boundaries via \p{L}, because \b in JS does not see non-ASCII letters ("sprawdź" at the end of a word)
+const ACTION = /(?<!\p{L})(wykonaj|uruchom|odpal|sprawdź|sprawdz|przeczytaj|wyświetl|wyswietl|pokaż wynik|wklej|usuń|usun|zmień|zmien|popraw|edytuj|utwórz|utworz|stwórz|stworz|zapisz|skopiuj|przenieś|przenies|dodaj|zainstaluj|napraw|run|execute|check|show the output|paste|delete|remove|rename|change|fix|edit|create|save|copy|move|install)(?!\p{L})/iu
 // tool call written as TEXT instead of a real call (Gemma 4, 10-21): `tools.shell({...})` from the Code Mode API,
 // `<shell command="..."/>`, `shell(command=...)`. Unambiguous -> fires without an action verb in the prompt.
 // 10-29 Gemma (29-blog-post-sitelint): 3 real calls, then 6 `<tool_call>{json}</tool_call>` blocks with made-up
@@ -108,13 +108,13 @@ const FAKE_CALL = /(?<![\w.])tools\.\w+\s*\(|<\s*(?:shell|bash|read|edit|write|e
 // 10-28 Gemma (16-minimal-diff): after real calls the last step writes the next calls as a lone backticked line
 // (`edit stats.py oldString: …`, `python3 test_stats.py`) or announces a fix with only a ``` block — nothing ran
 const INLINE_CALL = /^[ \t]*`(?:read|edit|write|shell|bash|grep|glob|python3?|node|cat|ls|sed|pytest)\s[^`\n]{1,400}`[ \t]*$/m
-const ANNOUNCED_BLOCK = /(?<!\p{L})(?:uruchamiam|poprawiam|zmieniam|edytuj[eę]|zapisuj[eę]|tworz[eę]|wprowadzam)(?!\p{L})[^\n]*\n+\s*```/iu
+const ANNOUNCED_BLOCK = /(?<!\p{L})(?:uruchamiam|poprawiam|zmieniam|edytuj[eę]|zapisuj[eę]|tworz[eę]|wprowadzam|running|fixing|changing|editing|writing|creating|applying)(?!\p{L})[^\n]*\n+\s*```/iu
 const PROMPT_CMD = /:[ \t]*\n\s*(?:cat|ls|head|tail|wc|grep|find|stat|du|df|file|sort|diff|python3?|bash|sh|git)\s+\S/
-const DONE_CLAIM = /(?<!\bnie\s)(?<!\p{L})(usunąłem|usunęłam|zmieniłem|zmieniłam|utworzyłem|utworzyłam|stworzyłem|skopiowałem|przeniosłem|zapisałem|zmodyfikowałem|poprawiłem|wykonałem|uruchomiłem|zainstalowałem|zaktualizowałem|edytowałem|dodałem)(?!\p{L})[^\n]{0,40}?(plik|katalog|folder|`|\/)/iu
-const HANDOFF_SCRIPT = /r(?:ę|e)cznie[\s\S]{0,200}?sudo\s+(?:(?:bash|sh)\s+)?[`'"]?\S*?([\w.-]+\.sh)\b/iu
-const HOWTO = /^\s*(jak|how|w jaki sposób|czy da się|czy można)(?!\p{L})/iu
+const DONE_CLAIM = /(?<!\bnie\s)(?<!\p{L})(usunąłem|usunęłam|zmieniłem|zmieniłam|utworzyłem|utworzyłam|stworzyłem|skopiowałem|przeniosłem|zapisałem|zmodyfikowałem|poprawiłem|wykonałem|uruchomiłem|zainstalowałem|zaktualizowałem|edytowałem|dodałem|I (?:have )?(?:deleted|removed|changed|created|copied|moved|saved|modified|fixed|ran|installed|updated|edited|added))(?!\p{L})[^\n]{0,40}?(plik|katalog|file|directory|folder|`|\/)/iu
+const HANDOFF_SCRIPT = /(?:r(?:ę|e)cznie|manually)[\s\S]{0,200}?sudo\s+(?:(?:bash|sh)\s+)?[`'"]?\S*?([\w.-]+\.sh)\b/iu
+const HOWTO = /^\s*(jak|how|w jaki sposób|czy da się|czy można|can i|is it possible)(?!\p{L})/iu
 
-// czysta funkcja — testowana bez opencode
+// pure function — tested without opencode
 export function shouldFire(userText: string, assistantText: string, calls: number, lastStepText = ""): boolean {
   if (HOWTO.test(userText)) return false
   // 10-23 Gemma (08-long-file-lookup): two real reads, then the last step ends with `print(shell(command="grep …"))`
@@ -123,7 +123,7 @@ export function shouldFire(userText: string, assistantText: string, calls: numbe
   if (INLINE_CALL.test(lastStepText) || (ACTION.test(userText) && ANNOUNCED_BLOCK.test(lastStepText))) return true
   if (calls > 0) return false
   if (FAKE_CALL.test(assistantText)) return true
-  // poprawne przekazanie komendy roota użytkownikowi (zadania 09/19) — tu brak wywołania jest właściwy
+  // a correct hand-off of a root command to the user (tasks 09/19) — no call is the right thing here
   // 10-23 Gemma (19-no-sudo-multi): zero calls, "Uruchom RĘCZNIE: sudo bash …/setup.sh" — the script was never
   // written, so this hand-off is fabricated too (unless the script comes from the user's prompt)
   const hs = assistantText.match(HANDOFF_SCRIPT)
@@ -137,9 +137,9 @@ export function shouldFire(userText: string, assistantText: string, calls: numbe
   // claim of having done the action is false when nothing was called
   const claim = assistantText.match(DONE_CLAIM)
   if (claim && !userText.toLowerCase().includes(claim[1].toLowerCase())) return true
-  // sygnatura zmyślenia: blok komendy + co najmniej jeden INNY blok (rzekome wyjście)
+  // signature of a fabrication: a command block + at least one OTHER block (the supposed output)
   if (SHELL_BLOCK.test(assistantText) && blocks.length >= 2) return true
-  // albo blok (z językiem lub bez) przepisuje komendę z promptu zamiast ją wywołać
+  // or a block (with or without a language) retypes the command from the prompt instead of calling it
   return blocks.some((b) => {
     const first = b.replace(/^```[^\n]*\n/, "").split("\n")[0].trim()
     return first.length >= 6 && userText.includes(first)
@@ -151,7 +151,7 @@ function log(line: string) {
     mkdirSync(STATE_DIR, { recursive: true })
     appendFileSync(DEBUG_LOG, `[${new Date().toISOString()}] ${line}\n`)
   } catch {
-    // nie psuć sesji
+    // don't break the session
   }
 }
 
@@ -166,7 +166,7 @@ export default {
     const controller = new AbortController()
     async function fire(sessionID: string, s: State, delivery: "steer" | "queue", lastStepText = "") {
       if (s.fired || !shouldFire(s.user, s.text, s.calls, lastStepText)) return
-      s.fired = true // maks. raz na prompt użytkownika — bez pętli
+      s.fired = true // at most once per user prompt — no loops
       log(`HIT ${sessionID} mode=${MODE} via=${delivery} user=${JSON.stringify(s.user.slice(0, 120))} text=${JSON.stringify(s.text.slice(0, 200))}`)
       if (MODE !== "act") return
       try {
@@ -189,7 +189,7 @@ export default {
     }
     log(`plugin-load no-call-guard mode=${MODE}`)
     const g = globalThis as any
-    // wtyczka ma instancję na każdą lokalizację, a strumień jest wspólny — każde zdarzenie raz
+    // the plugin has an instance per location, and the stream is shared — each event once
     const seen: Set<string> = (g.__noCallGuardSeen ??= new Set<string>())
     const states: Map<string, State> = (g.__noCallGuardStates ??= new Map())
     void (async () => {
@@ -210,7 +210,7 @@ export default {
           switch (event.type) {
             case "session.inbox.enqueued": {
               const item = d.item ?? {}
-              // własna notka nie jest promptem użytkownika
+              // our own note is not a user prompt
               if (item.type === "user") {
                 s.user = String(item.payload?.text ?? item.text ?? item.data?.text ?? "")
                 if (!s.user) log(`inbox without text, shape: ${JSON.stringify(item).slice(0, 300)}`)
@@ -231,8 +231,8 @@ export default {
               s.text += String(d.text ?? "") + "\n"
               s.stepText += String(d.text ?? "")
               break
-            // koniec kroku bez wywołań = model zaraz skończy turę. Notka idzie TERAZ jako „steer”,
-            // bo po execution.succeeded `opencode run` już wychodzi i przerywa wznowiony krok („Step interrupted”).
+            // end of a step without calls = the model is about to end the turn. The note goes NOW as a "steer",
+            // because after execution.succeeded `opencode run` exits and interrupts the resumed step ("Step interrupted").
             case "session.step.ended": {
               const stepText = s.stepText
               s.stepText = ""
@@ -242,7 +242,7 @@ export default {
               break
             }
             case "session.execution.succeeded":
-              await fire(sessionID, s, "queue") // zapas, gdy step.ended nie przyszedł
+              await fire(sessionID, s, "queue") // fallback when step.ended did not arrive
               break
           }
         }

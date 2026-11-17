@@ -2,17 +2,17 @@ import { appendFileSync, mkdirSync } from "node:fs"
 import { homedir } from "node:os"
 import { join } from "node:path"
 
-// AUTO-THINKING (OpenCode V2) — dynamiczny limit myślenia dla wariantu „auto”.
-// Wariant w opencode.json wysyła `auto_thinking: [low, medium, high]` (tokeny).
-// Hook http.request czyta historię z treści zapytania i podmienia to pole na
+// AUTO-THINKING (OpenCode V2) — a dynamic thinking limit for the "auto" variant.
+// The variant in opencode.json sends `auto_thinking: [low, medium, high]` (tokens).
+// The http.request hook reads the history from the request body and replaces that field with
 // `thinking_budget_tokens`:
-//   nowe polecenie użytkownika (brak wyników narzędzi po nim) -> medium
-//   ostatnie narzędzie OK                                     -> low
-//   błąd w ostatnim narzędziu                                 -> medium
-//   >=2 błędy w ostatnich 3 narzędziach albo LOOP-STOP        -> high
-// Gdy wtyczka nie zadziała, llama.cpp ignoruje nieznane pole i stosuje limit
-// serwera (--reasoning-budget) — bezpieczny fallback.
-// Nigdy nie rzucamy — błąd wtyczki nie może psuć zapytania.
+//   a new user command (no tool results after it) -> medium
+//   last tool OK                                    -> low
+//   error in the last tool                          -> medium
+//   >=2 errors in the last 3 tools or LOOP-STOP     -> high
+// When the plugin does not work, llama.cpp ignores the unknown field and applies the limit
+// of the server (--reasoning-budget) — a safe fallback.
+// We never throw — a plugin error must not break the request.
 
 const HOME = homedir()
 const STATE_DIR = join(HOME, ".mempalace", "hook_state")

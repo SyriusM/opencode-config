@@ -2,12 +2,12 @@ import { appendFileSync, mkdirSync, readFileSync } from "node:fs"
 import { homedir } from "node:os"
 import { join } from "node:path"
 
-// ADVERSARY-GUARD — cichy recenzent wywołań narzędzi (pomysł: Goose „adversary mode”, 10-27).
-// Przed wywołaniem zmieniającym coś (shell/execute/write/edit…) pyta TEN SAM model, który właśnie liczy
-// (bez przełączania karty), czy wywołanie pasuje do zadania użytkownika i reguł. BLOCK = wejście podmienione
-// jak w danger-guard, model widzi powód. Fail-open: błąd/timeout recenzenta = przepuszczamy.
-// Kosztuje 1 zapytanie na wywołanie, dlatego DOMYŚLNIE TYLKO W TRENINGU (OPENCODE_DB z „training”).
-// ADVERSARY_GUARD=on wymusza wszędzie, =off wyłącza. Reguły: ~/.config/opencode/adversary.md (brak = domyślne).
+// ADVERSARY-GUARD — a silent reviewer of tool calls (idea: Goose "adversary mode", 10-27).
+// Before a call that changes something (shell/execute/write/edit…) it asks THE SAME model that is currently running
+// (no GPU switch) whether the call fits the user's task and the rules. BLOCK = input replaced
+// like in danger-guard, the model sees the reason. Fail-open: reviewer error/timeout = we let it through.
+// Costs 1 request per call, so BY DEFAULT ONLY IN TRAINING (OPENCODE_DB containing "training").
+// ADVERSARY_GUARD=on forces it everywhere, =off disables it. Rules: ~/.config/opencode/adversary.md (missing = defaults).
 // Log: ~/.mempalace/hook_state/adversary_guard.log
 
 const HOME = homedir()
@@ -103,7 +103,7 @@ export default {
     }
     const controller = new AbortController()
 
-    // prompty użytkownika: pierwszy = zadanie, ostatni = najnowsza wiadomość
+    // user prompts: the first = the task, the last = the newest message
     void (async () => {
       try {
         for await (const event of ctx.event.subscribe({ signal: controller.signal })) {
@@ -165,8 +165,8 @@ export default {
           return
         }
         log(`BLOCK ${ms}ms ses=${ev.sessionID} ${tool}: ${v.reason} | ${brief}`)
-        const text = `adversary-guard ZABLOKOWAŁ to wywołanie: ${v.reason}. Nie próbuj obejść blokady innym narzędziem. ` +
-          `Jeśli to jednak konieczne dla zadania, wyjaśnij użytkownikowi dlaczego i podaj, co chcesz zrobić.`
+        const text = `adversary-guard BLOCKED this call: ${v.reason}. Do not try to get around the block with another tool. ` +
+          `If it really is necessary for the task, explain to the user why and say what you want to do.`
         if (tool === "execute") ev.input = { ...ev.input, code: `throw new Error(${JSON.stringify(text)})` }
         else if (typeof ev.input.command === "string")
           ev.input = { ...ev.input, command: `printf '%s\\n' ${JSON.stringify(text).replace(/[`$]/g, "")} >&2; exit 1` }

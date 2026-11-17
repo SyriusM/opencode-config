@@ -1,24 +1,24 @@
 #!/home/user/mempalace/.venv/bin/python
-"""Krótki kontekst z mempalace dla katalogu projektu — doklejany do promptu systemowego opencode
-przez wtyczkę palace-context. Wypisuje gotowy tekst albo nic.
+"""Short mempalace context for a project directory — appended to the opencode system prompt
+by the palace-context plugin. Prints ready text or nothing.
 
-Użycie: palace-context <katalog> [--debug]
-- Serwer embeddingów (PALACE_EMBED_PORT: 8080 llama.cpp, 11434 Ollama) albo palace martwe → jedna linia ostrzeżenia zamiast pustki
-  (inaczej model myśli, że palace „nic nie wie”, a to brak danych, nie pomiar).
-- Katalog domowy / ogólne → tylko kontrola zdrowia, bez wyszukiwania (zapytanie bez treści = szum).
+Usage: palace-context <directory> [--debug]
+- Embedding server (PALACE_EMBED_PORT: 8080 llama.cpp, 11434 Ollama) or palace down → one warning line instead of silence
+  (otherwise the model thinks the palace "knows nothing", while it is missing data, not a measurement).
+- Home / generic directory → health check only, no search (a query without content = noise).
 """
 import os
 import socket
 import sys
 from pathlib import Path
 
-THRESHOLD = 0.57          # minimalne podobieństwo (bge-m3); niżej to szum
+THRESHOLD = 0.57          # minimum similarity (bge-m3); below that is noise
 MAX_RESULTS = 3
-MAX_CHARS = 350     # na jeden wynik
+MAX_CHARS = 350     # per result
 
 
 def read_config() -> dict:
-    """Opcjonalny $XDG_CONFIG_HOME/opencode-config/config, domyślnie ~/.config (KEY=VALUE, pisze go install.sh)."""
+    """Optional $XDG_CONFIG_HOME/opencode-config/config, default ~/.config (KEY=VALUE, written by install.sh)."""
     k = {}
     try:
         for line in (Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "opencode-config" / "config").read_text().splitlines():
@@ -31,9 +31,9 @@ def read_config() -> dict:
 
 
 K = read_config()
-# port serwera embeddingów do kontroli zdrowia; 0/puste = bez kontroli (np. embeddingi lokalne chromadb)
+# embedding server port for the health check; 0/empty = no check (e.g. local chromadb embeddings)
 PORT = int(K.get("PALACE_EMBED_PORT", "0") or 0)
-# TYLKO te skrzydła (bez dzienników, rozmów i spraw osobistych — model ma przeglądarkę i formularze); "*" = wszystkie
+# ONLY these wings (no diaries, chats or personal matters — the model has a browser and forms); "*" = all
 _w = K.get("PALACE_WINGS", "*")
 ALLOWED_WINGS = None if _w.strip() == "*" else {x.strip() for x in _w.split(",") if x.strip()}
 MEMPALACE_SRC = os.path.expanduser(K.get("MEMPALACE_SRC", "~/mempalace"))
@@ -52,32 +52,33 @@ def port_alive(port: int) -> bool:
 
 
 if PORT and not port_alive(PORT):
-    print(f"PALACE: embeddingi (:{PORT}) nie odpowiadają — mempalace_search zwróci pusto albo błąd. "
-          "Pusty wynik ≠ brak wiedzy; powiedz użytkownikowi, że palace jest niedostępny.")
+    print(f"PALACE: embeddings (:{PORT}) is not responding — mempalace_search will return nothing or an error. "
+          "An empty result ≠ no knowledge; tell the user the palace is unavailable.")
     sys.exit(0)
 
 if directory in (home, Path("/"), Path("/tmp")) or home not in directory.parents:
     sys.exit(0)
 
 if os.path.isdir(os.path.join(MEMPALACE_SRC, "mempalace")):
-    sys.path.insert(0, MEMPALACE_SRC)  # źródła MemPalace (fork); bez nich — pakiet z pip
-# MemPalace z PyPI przy imporcie przekierowuje fd 1 na stderr (ochrona protokołu MCP) — zapamiętaj prawdziwy stdout
+    sys.path.insert(0, MEMPALACE_SRC)  # MemPalace sources (fork); without them — the pip package
+# MemPalace from PyPI redirects fd 1 to stderr on import (MCP protocol protection) — keep the real stdout
 _stdout_fd = os.dup(1)
-sys.stdout, _out = open(os.devnull, "w"), sys.stdout  # mempalace drukuje telemetrię
+sys.stdout, _out = open(os.devnull, "w"), sys.stdout  # mempalace prints telemetry
 try:
     from mempalace import mcp_server as m
     rel = str(directory.relative_to(home))
+    # query stays Polish: the palace notes are mostly Polish (bge-m3 is multilingual anyway)
     query = f"{directory.name} — projekt w ~/{rel}: stan, decyzje, problemy"
     r = m.tool_search(query, limit=30)
     results = r.get("results", []) if isinstance(r, dict) else []
 except Exception as e:  # noqa: BLE001
     sys.stdout = _out
-    os.write(_stdout_fd, f"PALACE: wyszukiwanie padło ({type(e).__name__}) — palace może być niedostępny.\n".encode())
+    os.write(_stdout_fd, f"PALACE: search failed ({type(e).__name__}) — the palace may be unavailable.\n".encode())
     sys.exit(0)
 sys.stdout = _out
 
 def is_noise(w: dict) -> bool:
-    # entities.json pasuje do wszystkiego, surowe transkrypty (.jsonl) to rozmowa, nie fakty
+    # entities.json matches everything; raw transcripts (.jsonl) are conversation, not facts
     source = str(w.get("source_file", ""))
     text = str(w.get("text", "")).strip()
     if (ALLOWED_WINGS is not None and w.get("wing") not in ALLOWED_WINGS) or "diary" in str(w.get("room", "")):
@@ -93,8 +94,8 @@ if debug:
 if not selected:
     sys.exit(0)
 
-lines = [f"PALACE (tło z pamięci dla ~/{rel}; to notatki z przeszłości — stan sprawdzaj, zanim na nich oprzesz decyzję; "
-         "więcej: mempalace_search):"]
+lines = [f"PALACE (memory background for ~/{rel}; these are notes from the past — check the current state before basing a decision on them; "
+         "more: mempalace_search):"]
 for w in selected:
     text = " ".join(str(w.get("text", "")).split())
     if len(text) > MAX_CHARS:

@@ -3,14 +3,14 @@ import { homedir } from "node:os"
 import { join } from "node:path"
 import { execFile } from "node:child_process"
 
-// MEMPALACE ERROR PLUGIN (OpenCode V2) — telemetria błędów tooli
+// MEMPALACE ERROR PLUGIN (OpenCode V2) — tool error telemetry
 // Odpowiednik mempal_error_hook.sh z Claude Code, ten sam pipeline audytowy.
 //
-// UWAGA: celowo BEZ importu "@opencode/plugin". Dokumentacja (V1+V2): „V2 reads
-// the default export's id and setup()". Plugin.define to w runtime tylko
-// formalność, a rejestracja katalogu przez `plugins` w opencode.json nie daje
-// rozwiązywania pakietów (ResolveMessage: Cannot find package '@opencode/plugin')
-// — spędziliśmy z tym walkę, więc zostajemy przy czystym eksporcie obiektu.
+// NOTE: deliberately WITHOUT importing "@opencode/plugin". The docs (V1+V2): "V2 reads
+// the default export's id and setup()". Plugin.define is only a formality
+// at runtime, and registering the directory via `plugins` in opencode.json gives no
+// package resolution (ResolveMessage: Cannot find package '@opencode/plugin')
+// — we fought with this, so we stick to a plain object export.
 //
 // Dokumentacja: OpenCode → Plugins → Hooks → Tools
 //   ctx.tool.hook("execute.after", cb)
@@ -19,16 +19,16 @@ import { execFile } from "node:child_process"
 //     ( { status: "completed", result } | { status: "error", error: Tool.Error } )
 //   Tool.Error (schema): { message: string, error?: Defect, metadata?: Record }
 //
-// === OUTPUT (spójny z Claude Code) ===
-//   ~/mempalace/audit/errors_YYYYMMDD.jsonl — JSONL, materiał na digest do palace
+// === OUTPUT (consistent with Claude Code) ===
+//   ~/mempalace/audit/errors_YYYYMMDD.jsonl — JSONL, material for a digest into the palace
 //   ~/.mempalace/hook_state/hook.log        — 1 linia human-readable na zdarzenie
-//   ~/.mempalace/hook_state/opencode_plugins_loaded — marker załadowania pluginu
+//   ~/.mempalace/hook_state/opencode_plugins_loaded — plugin load marker
 //
 // === ZASADY ===
-//   * Zero tokenów — hook niczego nie wstrzykuje do kontekstu, milczy.
-//   * Nigdy nie rzucamy z hooka (try/catch) — błąd hooka nie może psuć toola.
-//   * Tylko status === "error"; sukcesy pomijamy (to jest ERROR hook).
-//   * Wejście toola ucinamy do 4 KB, komunikat błędu do 500 znaków.
+//   * Zero tokens — the hook injects nothing into the context, it stays silent.
+//   * We never throw from the hook (try/catch) — a hook error must not break the tool.
+//   * Only status === "error"; successes are skipped (this is an ERROR hook).
+//   * Tool input is cut to 4 KB, the error message to 500 characters.
 
 const HOME = homedir()
 const AUDIT_DIR = join(HOME, "mempalace", "audit")
@@ -41,8 +41,8 @@ function appendLine(file: string, line: string) {
     mkdirSync(join(file, ".."), { recursive: true })
     appendFileSync(file, line + "\n")
   } catch {
-    // logowanie diagnostyczne pluginów trafia do stdout serwera; nie przerywamy
-    console.error(`[mempalace-error-hook] nie mogłem zapisać do ${file}`)
+    // plugin diagnostic logging goes to the server's stdout; we don't abort
+    console.error(`[mempalace-error-hook] could not write to ${file}`)
   }
 }
 
@@ -66,7 +66,7 @@ export default {
       ) => Promise<unknown>
     }
   }) {
-    // marker startu pluginu — dowód że load się udał
+    // plugin start marker — proof that the load worked
     appendLine(
       join(STATE_DIR, "opencode_plugins_loaded"),
       `[${new Date().toISOString()}] plugin mempalace-error-hook loaded`,
@@ -80,7 +80,7 @@ export default {
         const message = cap(String(event.error?.message ?? "(brak komunikatu)"), 500)
 
         // Twardo: zawsze zapis do SQLite (mempalace_core) poprzez subprocess
-        // Nie psujemy toola: błąd wpisu do SQLite ignorujemy.
+        // Don't break the tool: an error writing to SQLite is ignored.
         try {
           const agentName = cap(String(event.agent ?? "unknown"), 80)
           const detailsRaw = (() => {
@@ -116,7 +116,7 @@ export default {
           // ignoruj
         }
 
-        // input: najpierw pełne JSON, przy cyklu/wielkości → caps
+        // input: full JSON first, on a cycle/size → caps
         let input: unknown = event.input
         let record = {
           ts,
@@ -134,12 +134,12 @@ export default {
         let line: string
         try {
           line = JSON.stringify(record)
-          if (line.length > 8192) throw new Error("za duże")
+          if (line.length > 8192) throw new Error("too large")
         } catch {
           try {
             input = cap(JSON.stringify(event.input ?? null) ?? "null", 4096)
           } catch {
-            input = "[nie-serializowalne]"
+            input = "[not-serializable]"
           }
           record = { ...record, input }
           line = JSON.stringify(record)

@@ -1,75 +1,75 @@
 ---
 name: freecode-tune
-description: Strojenie lokalnego serwera modeli (llama.cpp jako usługa systemd, z bootstrap.sh albo własna) pomiarem — AI proponuje zmianę flagi z białej listy, skrypt mierzy, lepsze zostaje, gorsze wraca. Użyj, gdy użytkownik mówi „dostrój model”, „przyspiesz model”, „kalibracja”, „freecode-tune”, „optymalne ustawienia”, „większy kontekst”, albo po zmianie sprzętu/RAM.
+description: Tune the local model server (llama.cpp as a systemd service, from bootstrap.sh or your own) by measurement — the AI proposes an allow-listed flag change, the script measures, better stays, worse is rolled back. Use when the user says "tune the model", "speed up the model", "calibrate", "freecode-tune", "optimal settings", "bigger context", or after a hardware/RAM change.
 ---
 
-# freecode-tune: strojenie serwera modeli
+# freecode-tune: tuning the model server
 
-Ty wybierasz, CO sprawdzić. Mierzy i decyduje skrypt `~/bin/freecode-tune` — jego werdykt jest ostateczny, nie oceniaj wyników sam i nie zmieniaj plików unitów ręcznie.
+You choose WHAT to try. The script `~/bin/freecode-tune` measures and decides — its verdict is final; do not judge results yourself and do not edit unit files by hand.
 
-Zasady (cały skill):
-- Każde wywołanie `bench` / `try` / `rollback` uruchamiaj narzędziem bash z `timeout: 1200000` (start modelu + 3 testy trwają 1–10 min). Jedno wywołanie na raz, nic równolegle.
-- Działasz na tym samym serwerze, który stroisz. Podczas próby serwer się restartuje — to normalne; po powrocie narzędzia pierwsza odpowiedź może być wolniejsza.
-- JEDNA zmiana na próbę (np. `try moe-cache=5600`), chyba że zmiany muszą iść razem (`n-cpu-moe=off moe-cache=4000`).
-- NIE zmniejszaj `ctx`, chyba że użytkownik o to prosi — mniejsze okno może uciąć tę rozmowę.
-- Limit: 6 prób na jedno polecenie użytkownika. Koniec wcześniej po 3 cofnięciach z rzędu.
+Rules (whole skill):
+- Run every `bench` / `try` / `rollback` with the bash tool and `timeout: 1200000` (model start + 3 tests take 1–10 min). One call at a time, nothing in parallel.
+- You run on the same server you are tuning. It restarts during a try — that is normal; after it comes back, the first tool reply may be slower.
+- ONE change per try (e.g. `try moe-cache=5600`), unless the changes must go together (`n-cpu-moe=off moe-cache=4000`).
+- Do NOT lower `ctx` unless the user asks — a smaller window can cut off this conversation.
+- Limit: 6 tries per user request. Stop earlier after 3 rollbacks in a row.
 
-## 1. Usługa i stan
+## 1. Service and state
 
 ```sh
 ~/bin/freecode-tune units
 ```
-Lista usług z llama-server (nazwa, plik modelu). Wybierz tę, o którą chodzi użytkownikowi (np. „35B” → usługa z `35B` w nazwie pliku modelu). Niejasne albo kilka pasuje → zapytaj, nie zgaduj. Dalej KAŻDE polecenie z `-u NAZWA` (dosłownie z listy), np. `~/bin/freecode-tune -u llama-qwen36 status`. Pusta lista → STOP: strojenie obsługuje tylko llama.cpp uruchamiany jako usługa systemd --user.
+Lists services running llama-server (name, model file). Pick the one the user means (e.g. "35B" → the service with `35B` in the model file name). Unclear or several match → ask, do not guess. From then on EVERY command uses `-u NAME` (verbatim from the list), e.g. `~/bin/freecode-tune -u llama-qwen36 status`. Empty list → STOP: tuning supports only llama.cpp run as a systemd --user service.
 
-Uwaga: strojenie innej usługi niż ta, na której działasz, może Cię zatrzymać na czas próby (usługi z `Conflicts=` dzielą kartę). Po próbie Twój model wstaje sam przy następnym zapytaniu.
+Note: tuning a service other than the one you run on may stop you for the duration of a try (services with `Conflicts=` share the GPU). After the try your model starts again on the next request.
 
 ```sh
-~/bin/freecode-tune -u NAZWA status
+~/bin/freecode-tune -u NAME status
 ```
-- `! strażnik odsunął zmiany strojenia po awarii` → przekaż użytkownikowi ścieżkę; nie przywracaj tego pliku sam.
-- `! flagi w unicie zmienione ręcznie po strojeniu` → najpierw `~/bin/freecode-tune -u NAZWA rebase` (przenosi strojone flagi na nowe ustawienia i czyści bazę), potem krok 2. `bench`/`try` przy takiej zmianie kończą się kodem 5 — wtedy to samo.
-- Zapamiętaj: flagi teraz, wartości z białej listy, bazę (GOOD), ostatnie próby (nie powtarzaj prób już cofniętych przy tych samych pozostałych ustawieniach) i wynik kalibracji bootstrapu.
+- `! the guard moved the tuning changes aside after a failure` → give the user the path; do not restore that file yourself.
+- `! unit flags changed by hand after tuning` → first `~/bin/freecode-tune -u NAME rebase` (moves the tuned flags onto the new settings and clears the baseline), then step 2. `bench`/`try` exit with code 5 in this situation — same fix.
+- Remember: current flags (`flags:`), allow-list values, the baseline (GOOD), recent tries (do not repeat tries already rolled back with the same other settings) and the bootstrap calibration result.
 
-## 2. Baza
+## 2. Baseline
 
-Linia `baza (GOOD): brak` → `~/bin/freecode-tune -u NAZWA bench`.
-- Kod wyjścia 3 (`serwer właśnie liczy` albo `trwa inne strojenie`) → STOP, poproś użytkownika o chwilę bez innych sesji i strojeń.
-- Kod 4 (`pomiar nieważny`) → STOP: użytkownik ma zamknąć duże programy (przeglądarka, gry), potem powtórz.
-- Inaczej zapisz linię `wynik …` — to punkt odniesienia.
+Line `baseline (GOOD): none` → `~/bin/freecode-tune -u NAME bench`.
+- Exit code 3 (`the server is busy` or `another tuning … is running`) → STOP, ask the user for a moment without other sessions or tunings.
+- Code 4 (`measurement invalid`) → STOP: the user should close big programs (browser, games), then repeat.
+- Otherwise note the `score …` line — it is the reference point.
 
-## 3. Co sprawdzać (kolejność od największego zysku)
+## 3. What to try (biggest gain first)
 
-Patrz na flagi z kroku 1:
+Look at the flags from step 1:
 
-| Sytuacja we flagach | Próby |
+| Situation in the flags | Tries |
 |---|---|
-| `--cpu-moe` + `--moe-cache-mib N` (MoE, eksperci w RAM, cache na karcie) | `moe-cache` w górę o 512 aż do cofnięcia (zwykle brak VRAM); potem jedna próba w dół o 512, jeśli pierwsza w górę przegrała |
-| `--cpu-moe` na karcie z dużym VRAM (≥ 16 GB) | `n-cpu-moe=` liczba warstw do RAM, np. 20, potem w dół o 5 |
-| `-dev none` (samo CPU) | `threads=` liczba rdzeni fizycznych (`lscpu -p=CORE \| grep -v '^#' \| sort -u \| wc -l`), potem rdzenie − 1 |
-| zawsze | `spec=none` raz — sprawdza, czy spekulacja ngram w ogóle pomaga na tym sprzęcie |
-| karta z ≥ 12 GB VRAM albo wolny prompt (`prompt` < 300 tok/s) | `ubatch=1024`, potem `ubatch=2048 batch=2048` |
-| użytkownik chce większy kontekst | `ctx` w górę o 16384 (zostaje, jeśli traci ≤ 3%) |
-| `czekanie na pamięć` > 3% w bazie | `cache-ram` w dół (np. 1024) — mniej cache promptów, więcej RAM dla wag |
+| `--cpu-moe` + `--moe-cache-mib N` (MoE, experts in RAM, cache on the GPU) | `moe-cache` up by 512 until a rollback (usually out of VRAM); then one try down by 512 if the first one up lost |
+| `--cpu-moe` on a GPU with large VRAM (≥ 16 GB) | `n-cpu-moe=` number of layers kept in RAM, e.g. 20, then down by 5 |
+| `-dev none` (CPU only) | `threads=` number of physical cores (`lscpu -p=CORE \| grep -v '^#' \| sort -u \| wc -l`), then cores − 1 |
+| always | `spec=none` once — checks whether ngram speculation helps on this hardware at all |
+| GPU with ≥ 12 GB VRAM or slow prompt (`prompt` < 300 tok/s) | `ubatch=1024`, then `ubatch=2048 batch=2048` |
+| the user wants a bigger context | `ctx` up by 16384 (kept if it loses ≤ 3%) |
+| `memory wait` > 3% in the baseline | `cache-ram` down (e.g. 1024) — less prompt cache, more RAM for weights |
 
-Nie wymyślaj kluczy spoza tabeli `status`. Skrypt i tak odrzuci inne (`nie jest na białej liście`, kod 2) — wtedy wybierz inną próbę, nie obchodź blokady.
+Do not invent keys outside the `status` allow-list. The script rejects others anyway (`is not on the allow-list`, code 2) — then pick another try, do not work around the block.
 
-## 4. Próba
+## 4. Try
 
 ```sh
-~/bin/freecode-tune -u NAZWA try KLUCZ=WARTOŚĆ
+~/bin/freecode-tune -u NAME try KEY=VALUE
 ```
-Ostatnia linia:
-- `✓ zostaje: wynik A → B (+x%)` → nowa baza; następną próbę licz od niej.
-- `↩ cofnięte: …` → ustawienia wróciły do bazy. Przyczyna w linii: wynik za słaby, `serwer nie wstał` (zwykle brak pamięci — nie idź dalej w tę stronę) albo `pomiar zakłócony` (powtórz tę samą próbę raz; drugi raz zakłócony → STOP, poproś o zamknięcie programów).
-- `UWAGA: po cofnięciu serwer nie wstał` → natychmiast `~/bin/freecode-tune -u NAZWA rollback` i STOP z dosłownym wyjściem.
-- Kod 2 → błąd w Twoim poleceniu (zakres, klucz); popraw i spróbuj raz jeszcze.
+Last line:
+- `✓ kept: score A → B (+x%)` → new baseline; count the next try from it.
+- `↩ rolled back: …` → settings are back at the baseline. The reason is in the line: score too low, `the server did not start` (usually out of memory — do not go further in that direction) or `measurement disturbed` (repeat the same try once; disturbed a second time → STOP, ask to close programs).
+- `WARNING: after the rollback the server did not start` → immediately `~/bin/freecode-tune -u NAME rollback` and STOP with the verbatim output.
+- Code 2 → an error in your command (range, key); fix it and try once more.
 
-## 5. Raport
+## 5. Report
 
-Krótko, dosłowne liczby z wyjścia skryptu, bez upiększania:
-1. baza na starcie (`wynik …` z kroku 2 albo `status`),
-2. tabela prób: zmiana → werdykt → wynik,
-3. ustawienia końcowe (`~/bin/freecode-tune -u NAZWA status`, linia `flagi:`),
-4. co jeszcze warto sprawdzić następnym razem (próby, na które zabrakło limitu).
+Briefly, verbatim numbers from the script output, no embellishing. Reply in the user's language.
+1. baseline at the start (`score …` from step 2 or `status`),
+2. table of tries: change → verdict → score,
+3. final settings (`~/bin/freecode-tune -u NAME status`, line `flags:`),
+4. what is worth trying next time (tries that did not fit in the limit).
 
-Wszystko cofa `~/bin/freecode-tune -u NAZWA rollback` (ustawienia sprzed strojenia). Historia prób: `~/.local/share/freecode/tune-history.jsonl`.
+`~/bin/freecode-tune -u NAME rollback` undoes everything (settings from before tuning). Try history: `~/.local/share/freecode/tune-history.jsonl`.

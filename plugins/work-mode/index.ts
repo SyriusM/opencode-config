@@ -2,16 +2,16 @@ import { appendFileSync, mkdirSync } from "node:fs"
 import { homedir } from "node:os"
 import { join } from "node:path"
 
-// WORK-MODE — dokleja do promptu systemowego jedną linię: czy po drugiej stronie jest człowiek.
-//   auto: `opencode run` albo `--auto` (trening AFK, skrypty) — nikt nie odpowie na pytanie o wybór,
-//         więc model bierze rekomendowaną opcję, mówi którą i robi dalej;
-//   step: TUI / usługa — model podaje opcje i czeka (AGENTS.md, Start Briefing krok 4).
-// Wymuszenie: FREECODE_MODE=auto|step. Linia jest stała w obrębie procesu → nie psuje cache promptu.
-// ANTI-STUCK (tylko auto): krok bez wywołań narzędzi, który kończy się opcjami i pytaniem o wybór
-// („a czy b?”, „którą wybierasz?”), = w `run` zadanie by się tu skończyło. Wtedy notka „steer”:
-// weź rekomendowaną i rób dalej. Maks. MAX_NUDGES na prompt użytkownika — bez pętli. Bez modelu, sama reguła.
-// Wyłączniki (A/B treningu): WORK_MODE=off = cała wtyczka nic nie robi; ANTI_STUCK=off = tylko linia, bez notek.
-// Nigdy nie rzucamy z hooka. Log: ~/.mempalace/hook_state/work_mode.log
+// WORK-MODE — appends one line to the system prompt: whether there is a human on the other side.
+//   auto: `opencode run` or `--auto` (AFK training, scripts) — nobody will answer a question about a choice,
+//         so the model takes the recommended option, says which one and goes on;
+//   step: TUI / service — the model gives options and waits (AGENTS.md, Start Briefing step 4).
+// Override: FREECODE_MODE=auto|step. The line is constant within a process → it does not break the prompt cache.
+// ANTI-STUCK (auto only): a step without tool calls that ends with options and a question about the choice
+// ("a or b?", "which one do you pick?") = in `run` the task would end here. Then a "steer" note:
+// take the recommended one and go on. At most MAX_NUDGES per user prompt — no loops. No model, just a rule.
+// Switches (training A/B): WORK_MODE=off = the whole plugin does nothing; ANTI_STUCK=off = only the line, no notes.
+// We never throw from the hook. Log: ~/.mempalace/hook_state/work_mode.log
 
 const LOG = join(homedir(), ".mempalace", "hook_state", "work_mode.log")
 
@@ -45,9 +45,9 @@ export function isStuck(stepText: string, calls: number): boolean {
 }
 
 export const NUDGE =
-  "[work-mode] Tryb auto: nikt nie odpowie na pytanie o wybór, a zadanie skończy się na tej turze. " +
-  "Weź opcję, którą rekomendujesz (a jeśli żadnej nie oznaczyłeś — najbezpieczniejszą, która kończy zadanie), " +
-  "napisz jednym zdaniem którą i dlaczego, i od razu wykonaj ją narzędziami do końca."
+  "[work-mode] Auto mode: nobody will answer a question about a choice, and the task ends with this turn. " +
+  "Take the option you recommend (and if you marked none — the safest one that finishes the task), " +
+  "say in one sentence which one and why, and carry it out with tools to the end right away."
 
 export function modeLine(mode: "auto" | "step"): string {
   return mode === "auto"
@@ -57,7 +57,7 @@ export function modeLine(mode: "auto" | "step"): string {
 
 function watch(ctx: any) {
   const g = globalThis as any
-  // instancja na lokalizację, strumień wspólny — każde zdarzenie raz
+  // one instance per location, a shared stream — each event once
   const seen: Set<string> = (g.__workModeSeen ??= new Set<string>())
   const states: Map<string, { calls: number; text: string; nudges: number }> = (g.__workModeStates ??= new Map())
   void (async () => {

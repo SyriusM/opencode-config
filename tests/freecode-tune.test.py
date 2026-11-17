@@ -139,8 +139,8 @@ except SystemExit as e:
 
 # measurement formatting, verdict thresholds
 m = {"chat": 60.0, "code": 140.0, "prompt": 800.0, "prompt_tokens": 39000, "mem_stall_pct": 0.5, "score": 189.0}
-ok("czat 60.0" in tune.fmt(m) and "39000" in tune.fmt(m), "format")
-ok(tune.fmt({"error": "chat: timeout"}).startswith("BŁĄD"), "format error")
+ok("chat 60.0" in tune.fmt(m) and "39000" in tune.fmt(m), "format")
+ok(tune.fmt({"error": "chat: timeout"}).startswith("ERROR"), "format error")
 
 print(f"{fails} FAIL" if fails else f"freecode-tune: {checks} checks OK")
 sys.exit(1 if fails else 0)

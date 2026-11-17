@@ -1,37 +1,37 @@
 #!/usr/bin/env python3
-"""freecode — opencode tylko na lokalnych modelach.
+"""freecode — opencode on local models only.
 
-  freecode [argumenty opencode]   sprawdza konfigurację i uruchamia opencode (TUI albo `run`)
-  freecode --configure [ETAPY]    konfiguracja w 4 etapach (jak bootstrap; każda zmiana z pytaniem):
-                                    1 połączenie z lokalnym modelem, 2 zgodność ze wzorcem,
-                                    3 styl pracy modelu (a/b/c), 4 opis komputera w AGENTS.md
-                                  np. `--configure 3` = tylko styl pracy; pierwszy start sam robi 1 i 4
-  freecode --set KLUCZ=a ...      zmień styl pracy bez pytań (klucze: options narration risk language)
-  freecode --undo                 cofnij ostatnią zmianę stylu pracy (drugi raz = przywróć)
-  freecode --check                tylko kontrola konfiguracji (kod 0 = można startować)
-  freecode --env                  odśwież opis komputera w AGENTS.md (system, GPU, model)
-  freecode --version              wersja freecode i opencode pod spodem
+  freecode [opencode arguments]   checks the configuration and starts opencode (TUI or `run`)
+  freecode --configure [STAGES]   configuration in 4 stages (like bootstrap; every change asks first):
+                                    1 connection to a local model, 2 conformity with the template,
+                                    3 the model's work style (a/b/c), 4 computer description in AGENTS.md
+                                  e.g. `--configure 3` = work style only; the first start does 1 and 4 itself
+  freecode --set KEY=a ...        change the work style without questions (keys: options narration risk language)
+  freecode --undo                 undo the last work-style change (a second time = redo)
+  freecode --check                configuration check only (exit 0 = OK to start)
+  freecode --env                  refresh the computer description in AGENTS.md (system, GPU, model)
+  freecode --version              version of freecode and the opencode underneath
 
-freecode to NAKŁADKA na niezmieniony opencode, nie fork: opencode aktualizuje się normalnie
-(npm i -g @opencode/cli), a freecode przy każdym starcie pilnuje, żeby działał tylko na lokalnych modelach.
+freecode is a WRAPPER around unmodified opencode, not a fork: opencode updates normally
+(npm i -g @opencode/cli), and on every start freecode makes sure it runs on local models only.
 
-Dlaczego: opencode 2.x bez poprawnej konfiguracji (brak pliku, uszkodzony JSON, brak lokalnego
-`small_model`) po cichu wysyła rozmowę do darmowych modeli w chmurze. freecode przed każdym startem
-sprawdza wszystkie źródła konfiguracji i odmawia startu, jeśli którykolwiek dostawca nie jest lokalny.
-Odmawia też przy `share: auto`, nielokalnym `enterprise.url`, zdalnym serwerze MCP i nadpisanym adresie modelu.
-Nie przekazuje do opencode poleceń, które wychodzą do sieci albo wystawiają serwer: `upgrade`, `auth`, `acp`,
-`service`, `uninstall`, `plugin add/check/update`, `mcp auth`, `pair --remote`, nielokalne `--server` i `session import URL`.
-TUI idzie przez usługę w tle (ta sama sesja w terminalu i w przeglądarce/telefonie). Usługa trzyma
-konfigurację z chwili swojego startu, więc gdy plik konfiguracji jest nowszy, freecode każe jej wczytać
-ją ponownie (`opencode reload`, bez restartu; restart tylko gdy reload się nie uda),
-a jeśli usługa właśnie liczy sesję, startuje prywatny serwer (`--standalone`). `run` zawsze idzie
-z `--standalone`. Autoaktualizacja i pobieranie listy modeli są wyłączone.
+Why: opencode 2.x without a correct configuration (missing file, broken JSON, no local
+`small_model`) silently sends the conversation to free cloud models. Before every start freecode
+checks all configuration sources and refuses to start if any provider is not local.
+It also refuses on `share: auto`, a non-local `enterprise.url`, a remote MCP server and an overridden model address.
+It does not pass to opencode commands that go out to the network or expose a server: `upgrade`, `auth`, `acp`,
+`service`, `uninstall`, `plugin add/check/update`, `mcp auth`, `pair --remote`, non-local `--server` and `session import URL`.
+The TUI goes through the background service (the same session in the terminal and in the browser/phone). The service keeps
+the configuration from the moment it started, so when a configuration file is newer, freecode tells it to reload
+it (`opencode reload`, no restart; a restart only when the reload fails),
+and if the service is busy with a session, it starts a private server (`--standalone`). `run` always goes
+with `--standalone`. Auto-update and fetching the model list are disabled.
 
-Zmienne: FREECODE_STANDALONE (TUI zawsze z prywatnym serwerem),
-FREECODE_HOSTS (dodatkowe dozwolone hosty, po przecinku, np. adres serwera w LAN),
-FREECODE_OPENCODE (ścieżka do opencode), FREECODE_URL + FREECODE_MODEL (konfigurator bez pytań),
-FREECODE_YES (konfigurator przyjmuje domyślne odpowiedzi).
-Zgodność wstecz: --konfiguruj, --sprawdz, FREECODE_HOSTY i FREECODE_TAK też działają.
+Variables: FREECODE_STANDALONE (TUI always with a private server),
+FREECODE_HOSTS (extra allowed hosts, comma-separated, e.g. a server address in the LAN),
+FREECODE_OPENCODE (path to opencode), FREECODE_URL + FREECODE_MODEL (configurator without questions),
+FREECODE_YES (the configurator accepts the default answers).
+Backward compatibility: --konfiguruj, --sprawdz, FREECODE_HOSTY and FREECODE_TAK also work.
 """
 import ipaddress
 import json
@@ -52,9 +52,9 @@ FC_DIR = os.path.join(XDG, "freecode")
 MARKER = os.path.join(FC_DIR, "configured")
 OLD_MARKER = os.path.join(FC_DIR, "skonfigurowane")  # before 2026-10-21
 ENV_STAMP = os.path.join(FC_DIR, "env-checked")     # kiedy ostatnio sprawdzono opis komputera
-AUDIT_LOG = os.path.join(FC_DIR, "audit.log")       # odmowy startu: JSON, jedna linia na zdarzenie
+AUDIT_LOG = os.path.join(FC_DIR, "audit.log")       # start refusals: JSON, one line per event
 CONFIG_NAMES = ("opencode.jsonc", "opencode.json", "config.json")
-# standardowe porty lokalnych serwerów modeli
+# standard ports of local model servers
 SERVERS = [("llama.cpp", 8080), ("Ollama", 11434), ("LM Studio", 1234), ("vLLM", 8000)]
 
 
@@ -66,7 +66,7 @@ def info(s):
     print(s, file=sys.stderr)
 
 
-# ── JSONC: komentarze // i /* */ oraz przecinki na końcu, poza stringami ──────────────────────
+# ── JSONC: // and /* */ comments and trailing commas, outside strings ──────────────────────
 def jsonc(text):
     out, i, n, in_str = [], 0, len(text), False
     while i < n:
@@ -91,7 +91,7 @@ def jsonc(text):
             out.append(c)
         i += 1
     s = "".join(out)
-    # przecinek przed } albo ] (poza stringami — stringi już nie zawierają komentarzy, ale mogą zawierać ",}")
+    # a comma before } or ] (outside strings — strings no longer contain comments, but may contain ",}")
     result, in_str, i = [], False, 0
     while i < len(s):
         c = s[i]
@@ -115,13 +115,13 @@ def jsonc(text):
     return json.loads("".join(result))
 
 
-# ── źródła konfiguracji, w kolejności nakładania ─────────────────────────────────────────────
+# ── configuration sources, in the order they are layered ─────────────────────────────────────────────
 def sources(directory):
     paths = [os.path.join(OC_DIR, n) for n in CONFIG_NAMES]
     if os.environ.get("OPENCODE_CONFIG"):
         paths.append(os.environ["OPENCODE_CONFIG"])
     if not os.environ.get("OPENCODE_DISABLE_PROJECT_CONFIG"):
-        # pliki projektu: od katalogu startu w górę do korzenia repozytorium git (albo katalogu domowego)
+        # project files: from the start directory up to the git repository root (or the home directory)
         project, d = [], os.path.abspath(directory)
         while True:
             for n in ("opencode.jsonc", "opencode.json", ".opencode/opencode.jsonc", ".opencode/opencode.json"):
@@ -158,18 +158,18 @@ def provider_of(model):
 
 
 def check(directory="."):
-    """Zwraca (problemy, połączona konfiguracja, główny plik). Pusta lista problemów = można startować."""
+    """Returns (problems, merged configuration, main file). An empty problem list = OK to start."""
     problems, merged, providers = [], {}, {}
     files = sources(directory)
     if not files:
-        return ["brak konfiguracji opencode (uruchom: freecode --configure)"], {}, None
+        return ["no opencode configuration (run: freecode --configure)"], {}, None
     for file_path, content in files:
         try:
             c = jsonc(content if content is not None else open(file_path, encoding="utf-8").read())
             if not isinstance(c, dict):
-                raise ValueError("to nie jest obiekt JSON")
+                raise ValueError("not a JSON object")
         except (ValueError, OSError) as e:
-            problems.append(f"{file_path}: nie da się odczytać ({e})")
+            problems.append(f"{file_path}: cannot be read ({e})")
             continue
         for k, v in c.items():
             if k == "provider" and isinstance(v, dict):
@@ -186,16 +186,16 @@ def check(directory="."):
 
     enabled = merged.get("enabled_providers")
     if not isinstance(enabled, list) or not enabled:
-        problems.append("brak `enabled_providers` — bez tej listy opencode może użyć dostawców w chmurze")
+        problems.append("no `enabled_providers` — without this list opencode may use cloud providers")
         enabled = []
     for pid in enabled:
         url = ((providers.get(pid) or {}).get("options") or {}).get("baseURL")
         if not url:
-            problems.append(f"dostawca `{pid}` nie ma `options.baseURL` — nie wiadomo, czy jest lokalny")
+            problems.append(f"provider `{pid}` has no `options.baseURL` — cannot tell whether it is local")
         elif not is_local(url):
-            problems.append(f"dostawca `{pid}` nie jest lokalny ({url}); dozwolone: localhost, 127.0.0.0/8, ::1, FREECODE_HOSTS")
+            problems.append(f"provider `{pid}` is not local ({url}); allowed: localhost, 127.0.0.0/8, ::1, FREECODE_HOSTS")
         prov = providers.get(pid) or {}
-        overrides = [(f"provider.{pid}.api", prov.get("api"))]   # adres może być nadpisany poza options.baseURL
+        overrides = [(f"provider.{pid}.api", prov.get("api"))]   # the address may be overridden outside options.baseURL
         for mid, m in (prov.get("models") or {}).items() if isinstance(prov.get("models"), dict) else ():
             if isinstance(m, dict):
                 overrides.append((f"provider.{pid}.models.{mid}.provider.api", (m.get("provider") or {}).get("api")
@@ -204,30 +204,30 @@ def check(directory="."):
                                   if isinstance(m.get("options"), dict) else None))
         for name, u in overrides:
             if isinstance(u, str) and "://" in u and not is_local(u):
-                problems.append(f"`{name}` = {u}: adres nie jest lokalny")
+                problems.append(f"`{name}` = {u}: the address is not local")
     models = [("model", merged.get("model")), ("small_model", merged.get("small_model"))]
     models += [(f"agent.{a}.model", cfg.get("model")) for a, cfg in (merged.get("agent") or {}).items() if cfg.get("model")]
     for name, m in models:
         if not m:
-            problems.append(f"brak `{name}` — opencode dobierze model sam, także z chmury"
-                            + (" (small_model służy m.in. do tytułów sesji)" if name == "small_model" else ""))
+            problems.append(f"no `{name}` — opencode will pick a model itself, possibly from the cloud"
+                            + (" (small_model is used e.g. for session titles)" if name == "small_model" else ""))
         elif provider_of(m) not in enabled:
-            problems.append(f"`{name}` = {m}: dostawca spoza `enabled_providers`")
+            problems.append(f"`{name}` = {m}: provider outside `enabled_providers`")
         else:
             models_map = (providers.get(provider_of(m)) or {}).get("models")
             if isinstance(models_map, dict) and m.split("/", 1)[1] not in models_map:
-                problems.append(f"`{name}` = {m}: model `{m.split('/', 1)[1]}` nie istnieje w `provider.{provider_of(m)}.models`")
-    # inne drogi, którymi treść sesji wychodzi z komputera
+                problems.append(f"`{name}` = {m}: model `{m.split('/', 1)[1]}` does not exist in `provider.{provider_of(m)}.models`")
+    # other ways session content leaves the computer
     if merged.get("share") == "auto" or merged.get("autoshare") is True:
-        problems.append("`share` = auto — sesje byłyby automatycznie udostępniane w sieci (ustaw \"disabled\" albo \"manual\")")
+        problems.append("`share` = auto — sessions would be shared on the internet automatically (set \"disabled\" or \"manual\")")
     ent = (merged.get("enterprise") or {}).get("url") if isinstance(merged.get("enterprise"), dict) else None
     if isinstance(ent, str) and ent and not is_local(ent):
-        problems.append(f"`enterprise.url` = {ent}: adres nie jest lokalny")
+        problems.append(f"`enterprise.url` = {ent}: the address is not local")
     for name, m in (merged.get("mcp") or {}).items() if isinstance(merged.get("mcp"), dict) else ():
         if m.get("type") == "remote" and m.get("enabled") is not False and not is_local(str(m.get("url") or "")):
-            problems.append(f"serwer MCP `{name}` jest zdalny ({m.get('url')}); wyłącz go (\"enabled\": false) "
-                            "albo dodaj host do FREECODE_HOSTS")
-    # wtyczki: lokalne ścieżki są OK, npm package to pobieranie z sieci
+            problems.append(f"MCP `{name}` server is remote ({m.get('url')}); disable it (\"enabled\": false) "
+                            "or add the host to FREECODE_HOSTS")
+    # plugins: local paths are OK, an npm package means a download from the network
     plugin_entries = merged.get("plugin")
     if isinstance(plugin_entries, list):
         allowed = [n.strip() for n in os.environ.get("FREECODE_PLUGINS", "").split(",") if n.strip()]
@@ -238,7 +238,7 @@ def check(directory="."):
             pkg = p[:at] if at > 0 else p
             if pkg in allowed:
                 continue
-            problems.append(f"wtyczka `{p}` jest z npm (pobierana z sieci); dodaj ją do FREECODE_PLUGINS albo usuń z `plugin`")
+            problems.append(f"plugin `{p}` is from npm (downloaded from the network); add it to FREECODE_PLUGINS or remove it from `plugin`")
     return problems, merged, files[0][0]
 
 
@@ -269,13 +269,13 @@ def save(file_path, data):
     if os.path.exists(file_path):
         backup = f"{file_path}.bak-{time.strftime('%Y%m%d-%H%M%S')}"
         shutil.copy2(file_path, backup)
-        info(f"  kopia: {backup}")
+        info(f"  backup: {backup}")
     tmp = file_path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
         f.write("\n")
     os.replace(tmp, file_path)
-    info(color(32, f"  zapisano {file_path}"))
+    info(color(32, f"  saved {file_path}"))
 
 
 def mark_configured():
@@ -286,9 +286,9 @@ def mark_configured():
 
 ENV_START, ENV_END = "<!-- ENV:START -->", "<!-- ENV:END -->"
 AGENTS_FILE = os.path.join(OC_DIR, "AGENTS.md")
-THINKING_BUDGETS = {"low": 512, "medium": 2048, "high": 4096}  # tokeny myślenia na zapytanie (2026-10-25)
+THINKING_BUDGETS = {"low": 512, "medium": 2048, "high": 4096}  # thinking tokens per request (2026-10-25)
 
-AGENT_PROMPTS = {  # agent → (tryb, czy wolno edytować); prompt = prompts/<agent>.txt, jeśli istnieje
+AGENT_PROMPTS = {  # agent → (mode, editing allowed); prompt = prompts/<agent>.txt if it exists
     "general": ("primary", True), "coder": ("primary", True),
     "reasoner": ("primary", False), "reviewer": ("subagent", False),
 }
@@ -302,7 +302,7 @@ def run_out(cmd):
 
 
 def server_ctx(url):
-    """Kontekst na jedną rozmowę z /props llama.cpp (n_ctx dzielone na sloty); None dla innych serwerów."""
+    """Context per conversation from llama.cpp /props (n_ctx divided by slots); None for other servers."""
     base = url.rstrip("/").removesuffix("/v1")
     try:
         with urllib.request.urlopen(base + "/props", timeout=5) as r:
@@ -313,12 +313,12 @@ def server_ctx(url):
 
 
 def global_config():
-    """Ścieżka globalnego opencode.json(c) albo None."""
+    """Path of the global opencode.json(c) or None."""
     return next((os.path.join(OC_DIR, n) for n in CONFIG_NAMES if os.path.isfile(os.path.join(OC_DIR, n))), None)
 
 
 def current_server():
-    """(baseURL, model) z obecnego configu: model → dostawca → options.baseURL."""
+    """(baseURL, model) from the current config: model → provider → options.baseURL."""
     f = global_config()
     try:
         c = jsonc(open(f, encoding="utf-8").read()) if f else {}
@@ -330,7 +330,7 @@ def current_server():
 
 
 def env_facts(url, model):
-    """Fakty o tym komputerze dla modelu — żeby nie pytał i nie zgadywał."""
+    """Facts about this computer for the model — so it neither asks nor guesses."""
     osr = {}
     try:
         for line in open("/etc/os-release", encoding="utf-8"):
@@ -349,7 +349,7 @@ def env_facts(url, model):
                         if any(k in l for k in ("VGA", "3D controller", "Display controller")))
     desktop = " ".join(x for x in (os.environ.get("XDG_CURRENT_DESKTOP"), os.environ.get("XDG_SESSION_TYPE")) if x)
     ctx = server_ctx(url) if url else None
-    try:  # powłoka logowania z passwd — $SHELL bywa nadpisany przez terminal albo narzędzie
+    try:  # login shell from passwd — $SHELL is sometimes overridden by the terminal or a tool
         login_shell = os.path.basename(pwd.getpwuid(os.getuid()).pw_shell)
     except (KeyError, OSError):
         login_shell = os.path.basename(os.environ.get("SHELL") or "?")
@@ -368,7 +368,7 @@ def env_facts(url, model):
 
 
 def current_env():
-    """Obecny blok ENV z AGENTS.md (bez znaczników) albo ""."""
+    """The current ENV block from AGENTS.md (without markers) or ""."""
     try:
         text = open(AGENTS_FILE, encoding="utf-8").read()
     except OSError:
@@ -379,16 +379,16 @@ def current_env():
 
 
 def write_env(url=None, model=None):
-    """Wpisuje/odświeża blok ENV w AGENTS.md; reszty pliku nie rusza.
+    """Writes/refreshes the ENV block in AGENTS.md; leaves the rest of the file alone.
 
-    Zapisuje tylko, gdy zmieniły się fakty (sama data w nagłówku się nie liczy): każdy zapis zmienia
-    mtime AGENTS.md, a to restartuje usługę w tle i unieważnia cache promptu. Zwraca True po zapisie.
+    Writes only when the facts changed (the date in the header alone does not count): every write changes
+    the mtime of AGENTS.md, which restarts the background service and invalidates the prompt cache. Returns True after a write.
     """
     if not url:
         url, model = current_server()
     new, old = env_facts(url, model), current_env()
     line = next((l for l in new.splitlines() if l.startswith("- Model:")), "")
-    if line and ", context " not in line:   # serwer nie odpowiedział — zostaje znany kontekst tego samego modelu
+    if line and ", context " not in line:   # the server did not answer — the known context of the same model stays
         head = line.split(" (default model", 1)[0]
         kept = next((l for l in old.splitlines() if l.startswith(head + ", context ")), None)
         if kept:
@@ -396,7 +396,7 @@ def write_env(url=None, model=None):
     changed = not old or old.split("\n", 1)[-1] != new.split("\n", 1)[-1]
     if changed:
         write_block(ENV_START, ENV_END, new)
-        info(color(32, f"  środowisko wpisane do {AGENTS_FILE}"))
+        info(color(32, f"  environment written to {AGENTS_FILE}"))
     try:
         os.makedirs(FC_DIR, exist_ok=True)
         with open(ENV_STAMP, "w") as f:
@@ -407,21 +407,21 @@ def write_env(url=None, model=None):
 
 
 def stage_connect():
-    """Etap 1: lokalny serwer modeli + bezpieczny opencode.json."""
-    info("freecode — etap 1: połączenie z lokalnym modelem")
+    """Stage 1: a local model server + a safe opencode.json."""
+    info("freecode — stage 1: connection to a local model")
     global_file = global_config()
     return connect_existing(global_file) if global_file else connect_new()
 
 
 def connect_existing(global_file):
-    """Plik jest: tylko dopisz brakujące zabezpieczenia (enabled_providers, small_model)."""
+    """The file exists: only add the missing safeguards (enabled_providers, small_model)."""
     problems, _, _ = check(HOME)
     if not problems:
-        info(color(32, f"  {global_file}: wszyscy dostawcy lokalni, nic do zmiany")); mark_configured(); return 0
+        info(color(32, f"  {global_file}: all providers local, nothing to change")); mark_configured(); return 0
     try:
         c = jsonc(open(global_file, encoding="utf-8").read())
     except ValueError as e:
-        info(color(31, f"  {global_file} jest uszkodzony ({e}) — popraw go ręcznie")); return 1
+        info(color(31, f"  {global_file} is broken ({e}) — fix it by hand")); return 1
     local_ids = [pid for pid, p in (c.get("provider") or {}).items()
                if is_local(((p or {}).get("options") or {}).get("baseURL") or "")]
     changes = {}
@@ -430,52 +430,52 @@ def connect_existing(global_file):
     if not c.get("small_model") and provider_of(c.get("model")) in (changes.get("enabled_providers") or c.get("enabled_providers") or []):
         changes["small_model"] = c["model"]
     if changes:
-        info(f"  {global_file} — proponowane uzupełnienie:")
+        info(f"  {global_file} — proposed addition:")
         for k, v in changes.items():
             info(f"    \"{k}\": {json.dumps(v, ensure_ascii=False)}")
         if global_file.endswith(".jsonc"):
-            info("  (plik .jsonc — zapis usunie komentarze)")
-        if tty_input("Zapisać? (t/n)", "t").lower().startswith(("t", "y")):
+            info("  (.jsonc file — saving will remove the comments)")
+        if tty_input("Save? (y/n)", "y").lower().startswith(("t", "y")):
             c.update(changes); save(global_file, c)
     problems, _, _ = check(HOME)
     for p in problems:
         info(color(33, f"  ! {p}"))
     if problems:
-        info("  Popraw powyższe ręcznie i uruchom: freecode --check"); return 1
+        info("  Fix the above by hand and run: freecode --check"); return 1
     mark_configured(); return 0
 
 
 def connect_new():
-    """Pliku nie ma: wykryj lokalny serwer, wybierz model, zapisz nowy opencode.json z agentami."""
+    """No file: detect a local server, pick a model, write a new opencode.json with agents."""
     url, model = os.environ.get("FREECODE_URL"), os.environ.get("FREECODE_MODEL")
     if not url:
         for name, port in SERVERS:
             u = f"http://127.0.0.1:{port}/v1"
             m = server_models(u)
             if m:
-                info(color(32, f"  znaleziono {name} na :{port} ({len(m)} modeli)")); url = u; break
+                info(color(32, f"  found {name} on :{port} ({len(m)} models)")); url = u; break
     if not url:
-        url = tty_input("Nie znaleziono lokalnego serwera modeli. Adres API zgodnego z OpenAI", "")
+        url = tty_input("No local model server found. Address of an OpenAI-compatible API", "")
     if not url:
-        info(color(31, "  brak serwera modeli — uruchom llama.cpp / Ollama / LM Studio i powtórz: freecode --configure")); return 1
+        info(color(31, "  no model server — start llama.cpp / Ollama / LM Studio and repeat: freecode --configure")); return 1
     if not is_local(url):
-        info(color(31, f"  {url} nie jest lokalny (dodaj host do FREECODE_HOSTS, jeśli to twój serwer w LAN)")); return 1
+        info(color(31, f"  {url} is not local (add the host to FREECODE_HOSTS if it is your own server in the LAN)")); return 1
     available = server_models(url) or []
     if not model:
         if available:
             for i, m in enumerate(available, 1):
                 info(f"    {i}. {m}")
-            choice = tty_input("Model (numer albo nazwa)", "1")
+            choice = tty_input("Model (number or name)", "1")
             model = available[int(choice) - 1] if choice.isdigit() and 0 < int(choice) <= len(available) else choice
         else:
-            model = tty_input("Serwer nie podał listy modeli. Nazwa modelu", "")
+            model = tty_input("The server gave no model list. Model name", "")
     if not model:
-        info(color(31, "  nie wybrano modelu")); return 1
+        info(color(31, "  no model chosen")); return 1
     entry = {"name": f"{model} (lokalnie)"}
     ctx = server_ctx(url)
     if ctx:
         entry["limit"] = {"context": ctx, "output": min(8192, ctx // 4)}
-    # limity myślenia (llama.cpp thinking_budget_tokens); „auto” dobiera je wtyczka auto-thinking
+    # thinking limits (llama.cpp thinking_budget_tokens); "auto" picks them via the auto-thinking plugin
     entry["variants"] = {**{k: {"thinking_budget_tokens": b} for k, b in THINKING_BUDGETS.items()},
                          "auto": {"auto_thinking": list(THINKING_BUDGETS.values()),
                                   "chat_template_kwargs": {"enable_thinking": True}},
@@ -490,7 +490,7 @@ def connect_new():
                                "models": {model: entry}}},
     }
     repo_agents = os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "agents")
-    for f in ["AGENTS.md"] + [f"prompts/{a}.txt" for a in AGENT_PROMPTS]:  # z repo (bootstrap), gdy brak własnych
+    for f in ["AGENTS.md"] + [f"prompts/{a}.txt" for a in AGENT_PROMPTS]:  # from the repo (bootstrap) when there are no own copies
         src, dst = os.path.join(repo_agents, f), os.path.join(OC_DIR, f)
         if os.path.isfile(src) and not os.path.exists(dst):
             os.makedirs(os.path.dirname(dst), exist_ok=True); shutil.copy2(src, dst)
@@ -510,22 +510,22 @@ def connect_new():
     mark_configured(); return 0
 
 
-# ── etapy 2–4: wzorzec, styl pracy, opis komputera ──────────────────────────────────
+# ── stages 2–4: template, work style, computer description ──────────────────────────────────
 PREFS_START, PREFS_END = "<!-- PREFS:START -->", "<!-- PREFS:END -->"
-PREFS = [  # (klucz, pytanie, {odpowiedź: reguła dla modelu}, domyślna)
-    ("options", "Gdy zadanie da się zrobić na kilka sposobów:", {
+PREFS = [  # (key, question, {answer: rule for the model}, default)
+    ("options", "When a task can be done in several ways:", {
         "a": "Different paths forward → offer 2–5 numbered options (recommendation first) and WAIT for the choice (WORK MODE auto: take the recommendation).",
         "b": "Offer options only for big or risky tasks; small ones — pick the best way and say which.",
         "c": "Pick the best way yourself, say in one line what you chose and why, go on."}, "a"),
-    ("narration", "Opis pracy:", {
+    ("narration", "Work narration:", {
         "a": "Describe EVERY step: before each tool call what and why, after it what came out.",
         "b": "Short progress line every few steps + full summary of changes at the end.",
         "c": "Only the final summary: every change, what was verified, what is left."}, "a"),
-    ("risk", "Zmiany w systemie:", {
+    ("risk", "Changes to the system:", {
         "a": "Ask before every edit or command that changes anything.",
         "b": "Edit project files freely; ask before deleting, installing, sudo, services, network.",
         "c": "Act on your own, with backups; ask only before irreversible actions."}, "b"),
-    ("language", "Język odpowiedzi:", {
+    ("language", "Reply language:", {
         "a": "Answer in Polish.", "b": "Answer in English.", "c": "Answer in the user's language."}, "c"),
 ]
 
@@ -539,7 +539,7 @@ def template_dir():
 
 
 def sections(text):
-    """{nagłówek ## : treść sekcji} — bez bloków ENV/PREFS."""
+    """{## heading: section content} — without the ENV/PREFS blocks."""
     out, name = {}, None
     for line in text.splitlines(keepends=True):
         if line.startswith("## "):
@@ -573,7 +573,7 @@ def write_block(start, end, block, before=None):
 
 
 def write_agents(text):
-    """Atomowy zapis AGENTS.md (usługa może go właśnie czytać)."""
+    """Atomic write of AGENTS.md (the service may be reading it right now)."""
     os.makedirs(OC_DIR, exist_ok=True)
     tmp = AGENTS_FILE + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
@@ -582,17 +582,17 @@ def write_agents(text):
 
 
 def fix_config(tdir, yes):
-    """opencode.json: kontekst głównego modelu, small_model, agenci. Zwraca liczbę rzeczy ok albo None (błąd)."""
+    """opencode.json: main model context, small_model, agents. Returns the number of things that were OK or None (error)."""
     gfile = global_config()
     if not gfile:
-        info(color(31, "  brak opencode.json — najpierw: freecode --configure")); return None
+        info(color(31, "  no opencode.json — first run: freecode --configure")); return None
     try:
         c = jsonc(open(gfile, encoding="utf-8").read())
     except ValueError as e:
-        info(color(31, f"  {gfile} uszkodzony ({e})")); return None
+        info(color(31, f"  {gfile} is broken ({e})")); return None
     changed, n_ok = False, 0
 
-    # 1. kontekst głównego modelu względem serwera (pytamy tylko serwer głównego modelu — inne by się budziły)
+    # 1. main model context vs. the server (we ask only the main model's server — others would wake up)
     pid, _, mname = (c.get("model") or "").partition("/")
     prov = (c.get("provider") or {}).get(pid) or {}
     url = (prov.get("options") or {}).get("baseURL")
@@ -601,19 +601,19 @@ def fix_config(tdir, yes):
     if entry is not None and ctx:
         lim = (entry.get("limit") or {}).get("context")
         if not lim or lim > ctx:
-            info(color(33, f"  ! {c['model']}: limit.context = {lim or 'brak'}, serwer daje {ctx} na rozmowę"
-                           + (" — opencode przepełni okno" if lim else " — opencode nie wie, kiedy kompaktować")))
-            if yes(f"Ustawić limit.context = {ctx}, output = {min(8192, ctx // 4)}?"):
+            info(color(33, f"  ! {c['model']}: limit.context = {lim or 'none'}, the server gives {ctx} per conversation"
+                           + (" — opencode will overflow the window" if lim else " — opencode does not know when to compact")))
+            if yes(f"Set limit.context = {ctx}, output = {min(8192, ctx // 4)}?"):
                 entry["limit"] = {"context": ctx, "output": min(8192, ctx // 4)}; changed = True
         else:
-            n_ok += 1; info(color(32, f"  ok kontekst: {lim} z {ctx}" + (" (mniej — celowo, mniej RAM na cache)" if lim < ctx else "")))
+            n_ok += 1; info(color(32, f"  ok context: {lim} of {ctx}" + (" (less — deliberately, less RAM for cache)" if lim < ctx else "")))
     elif url:
-        info(color(2, f"  - kontekst: serwer {url} nie podał /props (nie llama.cpp albo śpi) — pomijam"))
+        info(color(2, f"  - context: server {url} gave no /props (not llama.cpp, or asleep) — skipping"))
 
     # 2. small_model lokalny
     if not c.get("small_model") and c.get("model"):
-        info(color(33, "  ! brak small_model — tytuły sesji mogą iść do chmury"))
-        if yes(f"Ustawić small_model = {c['model']}?"):
+        info(color(33, "  ! no small_model — session titles may go to the cloud"))
+        if yes(f"Set small_model = {c['model']}?"):
             c["small_model"] = c["model"]; changed = True
     else:
         n_ok += 1
@@ -627,8 +627,8 @@ def fix_config(tdir, yes):
         src = os.path.join(tdir, "prompts", f"{a}.txt") if tdir else ""
         if not os.path.isfile(dst) and not os.path.isfile(src):
             continue
-        info(color(33, f"  ! brak agenta `{a}` ({mode}{'' if edit else ', bez edycji'})"))
-        if yes(f"Dodać agenta `{a}`?"):
+        info(color(33, f"  ! no agent `{a}` ({mode}{'' if edit else ', no editing'})"))
+        if yes(f"Add agent `{a}`?"):
             if not os.path.isfile(dst):
                 os.makedirs(os.path.dirname(dst), exist_ok=True); shutil.copy2(src, dst)
             agents[a] = {"mode": mode, "prompt": f"{{file:./prompts/{a}.txt}}", **({} if edit else {"permission": {"edit": "deny"}})}
@@ -641,7 +641,7 @@ def fix_config(tdir, yes):
 
 
 def fix_agents_md(tdir, yes):
-    """Sekcje AGENTS.md ze wzorca, których brakuje u użytkownika (istniejących nie ruszamy). Zwraca 1 = było ok."""
+    """AGENTS.md sections from the template that the user is missing (existing ones are left alone). Returns 1 = it was OK."""
     n_ok = 0
     if tdir:
         mine = open(AGENTS_FILE, encoding="utf-8").read() if os.path.isfile(AGENTS_FILE) else ""
@@ -649,8 +649,8 @@ def fix_agents_md(tdir, yes):
         missing = [(k, v) for k, v in sections(open(os.path.join(tdir, "AGENTS.md"), encoding="utf-8").read()).items()
                    if k not in have and not k.startswith("Environment")]
         if missing:
-            info(color(33, "  ! w AGENTS.md brakuje sekcji: " + ", ".join(k for k, _ in missing)))
-            if yes("Dopisać je (przed Learned Rules, reszta pliku bez zmian)?"):
+            info(color(33, "  ! AGENTS.md is missing sections: " + ", ".join(k for k, _ in missing)))
+            if yes("Add them (before Learned Rules, the rest of the file unchanged)?"):
                 if os.path.isfile(AGENTS_FILE):
                     shutil.copy2(AGENTS_FILE, f"{AGENTS_FILE}.bak-{time.strftime('%Y%m%d-%H%M%S')}")
                 add = "".join(v.rstrip("\n") + "\n\n" for k, v in missing if k != "Learned Rules")
@@ -658,24 +658,24 @@ def fix_agents_md(tdir, yes):
                     i = mine.index("## Learned Rules"); mine = mine[:i] + add + mine[i:]
                 else:
                     mine = mine.rstrip("\n") + "\n\n" + add + dict(missing).get("Learned Rules", "")
-                write_agents(mine); info(color(32, f"  dopisano {len(missing)} sekcji"))
+                write_agents(mine); info(color(32, f"  added {len(missing)} section(s)"))
         else:
             n_ok += 1
     else:
-        info(color(2, "  - brak wzorca agents/ (repo albo ~/.local/share/freecode/agents) — pomijam AGENTS.md"))
+        info(color(2, "  - no agents/ template (repo or ~/.local/share/freecode/agents) — skipping AGENTS.md"))
     return n_ok
 
 
 def stage_template():
-    """Etap 2: konfiguracja i AGENTS.md względem wzorca — każda poprawka z pytaniem t/n."""
-    info("freecode — etap 2: zgodność ze wzorcem (każda zmiana z pytaniem; FREECODE_YES = domyślne odpowiedzi)")
-    yes = lambda q: tty_input(q + " (t/n)", "t").lower().startswith(("t", "y"))
+    """Stage 2: configuration and AGENTS.md vs. the template — every fix asks y/n."""
+    info("freecode — stage 2: conformity with the template (every change asks first; FREECODE_YES = default answers)")
+    yes = lambda q: tty_input(q + " (y/n)", "y").lower().startswith(("t", "y"))
     tdir = template_dir()
     n_ok = fix_config(tdir, yes)
     if n_ok is None:
         return 1
     n_ok += fix_agents_md(tdir, yes)
-    info(color(32, f"  etap 2 gotowy ({n_ok} rzeczy było w porządku)"))
+    info(color(32, f"  stage 2 done ({n_ok} things were already OK)"))
     return 0
 
 
@@ -683,7 +683,7 @@ PREFS_LOG = os.path.join(os.environ.get("XDG_DATA_HOME") or os.path.join(HOME, "
 
 
 def save_prefs(chosen, source):
-    """Zapisuje blok PREFS w AGENTS.md i dopisuje zmianę do historii (dla --undo)."""
+    """Writes the PREFS block in AGENTS.md and appends the change to the history (for --undo)."""
     text = open(AGENTS_FILE, encoding="utf-8").read() if os.path.isfile(AGENTS_FILE) else ""
     before = current_prefs(text)
     full = {k: chosen.get(k) or before.get(k) or d for k, _, _, d in PREFS}
@@ -695,40 +695,40 @@ def save_prefs(chosen, source):
         with open(PREFS_LOG, "a", encoding="utf-8") as f:
             f.write(json.dumps({"time": time.strftime("%Y-%m-%d %H:%M:%S"), "source": source,
                                 "before": before, "after": full}) + "\n")
-    info(color(32, "  styl pracy: " + ", ".join(f"{k}={v}" for k, v in full.items())
-                   + ("" if full != before else " (bez zmian)")))
+    info(color(32, "  work style: " + ", ".join(f"{k}={v}" for k, v in full.items())
+                   + ("" if full != before else " (unchanged)")))
     return full
 
 
 def stage_prefs():
-    """Etap 3: styl pracy modelu — pytania a/b/c, Enter = obecny wybór."""
-    info("freecode — etap 3: styl pracy modelu (Enter = obecny wybór)")
+    """Stage 3: the model's work style — a/b/c questions, Enter = current choice."""
+    info("freecode — stage 3: the model's work style (Enter = current choice)")
     prev = current_prefs(open(AGENTS_FILE, encoding="utf-8").read() if os.path.isfile(AGENTS_FILE) else "")
     chosen = {}
     for key, question, answers, default in PREFS:
         info(f"  {question}")
         for letter, rule in answers.items():
             info(f"    {letter}) {rule}")
-        a = tty_input("Wybór (a/b/c)", prev.get(key, default)).lower()[:1]
+        a = tty_input("Choice (a/b/c)", prev.get(key, default)).lower()[:1]
         chosen[key] = a if a in answers else prev.get(key, default)
     save_prefs(chosen, "configure")
     return 0
 
 
 def set_prefs(args):
-    """`--set klucz=litera ...` — bez pytań (np. model po złej ocenie, za zgodą użytkownika)."""
+    """`--set key=letter ...` — no questions (e.g. the model after a bad rating, with the user's consent)."""
     valid = {k: ans for k, _, ans, _ in PREFS}
     chosen = {}
     for a in args:
         k, _, v = a.partition("=")
         if k not in valid or v not in valid[k]:
-            info(color(31, f"  zły argument {a!r} — możliwe: " + ", ".join(f"{k}={'/'.join(v)}" for k, v in valid.items())))
+            info(color(31, f"  bad argument {a!r} — possible: " + ", ".join(f"{k}={'/'.join(v)}" for k, v in valid.items())))
             return 1
         chosen[k] = v
     if not chosen:
-        info("  podaj np.: freecode --set narration=b"); return 1
+        info("  give e.g.: freecode --set narration=b"); return 1
     save_prefs(chosen, "set")
-    info(color(2, "  cofnięcie: freecode --undo"))
+    info(color(2, "  undo: freecode --undo"))
     return 0
 
 
@@ -736,19 +736,19 @@ def undo_prefs():
     try:
         last = json.loads(open(PREFS_LOG, encoding="utf-8").read().splitlines()[-1])
     except (OSError, IndexError, ValueError):
-        info("  brak zmian stylu pracy do cofnięcia"); return 1
-    info(f"  cofam zmianę z {last['time']} ({last['source']})")
+        info("  no work-style changes to undo"); return 1
+    info(f"  undoing the change from {last['time']} ({last['source']})")
     save_prefs(last["before"], "undo")
     return 0
 
 
 def stage_env():
-    """Etap 4: opis komputera w AGENTS.md + wskazówka o strojeniu serwera."""
-    info("freecode — etap 4: opis komputera")
+    """Stage 4: computer description in AGENTS.md + a hint about tuning the server."""
+    info("freecode — stage 4: computer description")
     if not write_env():
-        info(color(2, f"  środowisko bez zmian ({AGENTS_FILE})"))
+        info(color(2, f"  environment unchanged ({AGENTS_FILE})"))
     if shutil.which("freecode-tune"):
-        info(color(2, "  - szybkość serwera: `freecode-tune status` / w opencode „dostrój model” (mierzy i cofa, gdy gorzej)"))
+        info(color(2, "  - server speed: `freecode-tune status` / in opencode \"tune the model\" (measures, and rolls back when worse)"))
     return 0
 
 
@@ -756,22 +756,22 @@ STAGES = {"1": "stage_connect", "2": "stage_template", "3": "stage_prefs", "4": 
 
 
 def configure(stages="1234"):
-    """Etapy po kolei (domyślnie wszystkie; pierwszy start = "14"). Błąd etapu zatrzymuje kolejne."""
+    """Stages in order (all by default; first start = "14"). A failed stage stops the following ones."""
     for n in stages:
         if globals()[STAGES[n]]():
             return 1
     if len(stages) > 2:
-        info(color(32, "freecode: konfiguracja gotowa. Usługa wczyta zmiany przy następnym starcie freecode."))
+        info(color(32, "freecode: configuration ready. The service picks up the changes at the next freecode start."))
     return 0
 
 
-# ── usługa w tle (TUI) ───────────────────────────────────────────────────────────────────────
+# ── background service (TUI) ───────────────────────────────────────────────────────────────────────
 SERVICE_JSON = os.path.join(HOME, ".local", "state", "opencode", "service.json")
-RELOAD_STAMP = os.path.join(FC_DIR, "service-reloaded")   # pid usługi; mtime = kiedy ostatnio wczytała konfigurację
+RELOAD_STAMP = os.path.join(FC_DIR, "service-reloaded")   # service pid; mtime = when it last loaded the configuration
 
 
 def proc_start(pid):
-    """Czas startu procesu (epoch) z /proc; None, gdy procesu nie ma."""
+    """Process start time (epoch) from /proc; None when there is no such process."""
     try:
         fields = open(f"/proc/{pid}/stat").read().rsplit(")", 1)[1].split()
         btime = next(int(l.split()[1]) for l in open("/proc/stat") if l.startswith("btime "))
@@ -781,29 +781,29 @@ def proc_start(pid):
 
 
 def service_mode(oc, directory):
-    """Czy TUI może iść przez usługę w tle (jeden serwer dla terminala i telefonu).
+    """Whether the TUI can go through the background service (one server for the terminal and the phone).
 
-    Zwraca None (tak) albo powód, dla którego trzeba użyć `--standalone`. Usługa trzyma konfigurację
-    z chwili swojego startu albo ostatniego `opencode reload`: gdy którykolwiek plik konfiguracji jest
-    nowszy, a usługa nic nie liczy, każemy jej wczytać konfigurację ponownie (`opencode reload` — ten sam
-    proces, sesje zostają); restart tylko wtedy, gdy reload się nie uda albo usługa ma konfigurację ze
-    zmiennych środowiska. Gdy coś liczy (np. sesja z telefonu), nie ruszamy jej i startujemy prywatny serwer.
+    Returns None (yes) or the reason why `--standalone` is needed. The service keeps the configuration
+    from its start or the last `opencode reload`: when any configuration file is
+    newer and the service is idle, we tell it to reload the configuration (`opencode reload` — the same
+    process, sessions stay); a restart only when the reload fails or the service has its configuration from
+    environment variables. When it is busy (e.g. a session from the phone), we leave it alone and start a private server.
     """
     if os.environ.get("FREECODE_STANDALONE"):
         return "FREECODE_STANDALONE"
     env_cfg = [k for k in ("OPENCODE_CONFIG", "OPENCODE_CONFIG_CONTENT", "OPENCODE_CONFIG_DIR", "XDG_CONFIG_HOME")
                if os.environ.get(k)]
     if env_cfg:
-        return "konfiguracja ze zmiennych " + ", ".join(env_cfg) + " (usługa jej nie widzi)"
+        return "configuration from variables " + ", ".join(env_cfg) + " (the service does not see it)"
     try:
         svc = json.load(open(SERVICE_JSON, encoding="utf-8"))
         pid = int(svc["pid"])
     except (OSError, ValueError, KeyError, TypeError):
-        return None                      # usługa nie działa — opencode postawi ją ze sprawdzoną konfiguracją
+        return None                      # the service is not running — opencode will start it with the checked configuration
     started = proc_start(pid)
     if started is None:
         return None
-    try:                                 # znacznik liczy się tylko dla tego samego procesu usługi
+    try:                                 # the stamp counts only for the same service process
         if int(open(RELOAD_STAMP).read().strip()) == pid:
             started = max(started, os.path.getmtime(RELOAD_STAMP))
     except (OSError, ValueError):
@@ -816,18 +816,18 @@ def service_mode(oc, directory):
             if env.get(k) != "1":
                 missing.append(k)
         if missing:
-            return "usługa nie ma flag anty-network: " + ", ".join(missing)
-        reasons += [f"usługa ma {k}" for k in ("OPENCODE_CONFIG", "OPENCODE_CONFIG_CONTENT", "OPENCODE_CONFIG_DIR",
+            return "the service lacks the anti-network flags: " + ", ".join(missing)
+        reasons += [f"the service has {k}" for k in ("OPENCODE_CONFIG", "OPENCODE_CONFIG_CONTENT", "OPENCODE_CONFIG_DIR",
                                                 "XDG_CONFIG_HOME") if env.get(k)]
     except OSError:
-        reasons.append("nie da się odczytać środowiska usługi")
-    need_restart = bool(reasons)         # środowiska procesu reload nie zmieni
-    reasons += [f"{p} zmieniony po starcie usługi" for p, content in sources(directory)
+        reasons.append("cannot read the service environment")
+    need_restart = bool(reasons)         # reload does not change the process environment
+    reasons += [f"{p} changed after the service started" for p, content in sources(directory)
                 if content is None and os.path.getmtime(p) > started]
-    prompts_dir = os.path.join(OC_DIR, "prompts")   # reguły i prompty usługa też czyta tylko przy starcie
+    prompts_dir = os.path.join(OC_DIR, "prompts")   # the service also reads rules and prompts only at start
     rules = [AGENTS_FILE] + ([os.path.join(prompts_dir, f) for f in os.listdir(prompts_dir)]
                              if os.path.isdir(prompts_dir) else [])
-    reasons += [f"{p} zmieniony po starcie usługi" for p in rules
+    reasons += [f"{p} changed after the service started" for p in rules
                 if os.path.isfile(p) and os.path.getmtime(p) > started]
     if not reasons:
         return None
@@ -841,10 +841,10 @@ def service_mode(oc, directory):
     except (OSError, ValueError, KeyError, AttributeError):
         busy = True
     if busy:
-        return "usługa ma nieaktualną konfigurację (" + "; ".join(reasons) + ") i liczy sesję — nie przerywam jej"
+        return "the service has an outdated configuration (" + "; ".join(reasons) + ") and is busy with a session — not interrupting it"
     if not need_restart:
-        t0 = time.time()                 # zmiana pliku w trakcie reloadu ma być widoczna następnym razem
-        info(color(2, "freecode: usługa w tle wczytuje konfigurację ponownie (" + "; ".join(reasons) + ")"))
+        t0 = time.time()                 # a file change during the reload should be seen next time
+        info(color(2, "freecode: the background service is reloading the configuration (" + "; ".join(reasons) + ")"))
         try:
             r = subprocess.run([oc, "reload"], capture_output=True, text=True, timeout=60)
             ok = r.returncode == 0
@@ -859,16 +859,16 @@ def service_mode(oc, directory):
             except OSError:
                 pass
             return None
-    info(color(2, "freecode: restart usługi w tle (" + "; ".join(reasons) + ")"))
+    info(color(2, "freecode: restarting the background service (" + "; ".join(reasons) + ")"))
     r = subprocess.run([oc, "service", "restart"], capture_output=True, text=True, timeout=60)
     if r.returncode != 0:
-        return "restart usługi nie powiódł się: " + (r.stderr.strip() or r.stdout.strip())[:200]
+        return "service restart failed: " + (r.stderr.strip() or r.stdout.strip())[:200]
     return None
 
 
 # ── start ────────────────────────────────────────────────────────────────────────────────────
 def opencode_version(oc):
-    """Wersja z package.json obok binarki (szybko), w razie czego `opencode --version`."""
+    """Version from package.json next to the binary (fast), otherwise `opencode --version`."""
     d = os.path.dirname(os.path.realpath(oc))
     for _ in range(4):
         p = os.path.join(d, "package.json")
@@ -888,18 +888,18 @@ def opencode_version(oc):
 
 
 def describe(oc):
-    return f"freecode {VERSION} — nakładka na opencode {opencode_version(oc) if oc else '(nie znaleziono)'}, tylko lokalne modele"
+    return f"freecode {VERSION} — a wrapper around opencode {opencode_version(oc) if oc else '(not found)'}, local models only"
 
 
 def guard(directory):
-    """Kontrola przed startem: każdy dostawca lokalny. False = nie startujemy."""
+    """Pre-start check: every provider local. False = we do not start."""
     problems, _, _ = check(directory)
     if problems:
-        info(color(31, "freecode: nie uruchamiam opencode — konfiguracja nie jest w pełni lokalna:"))
+        info(color(31, "freecode: not starting opencode — the configuration is not fully local:"))
         for p in problems:
             info(f"  - {p}")
-        info("Popraw konfigurację albo uruchom: freecode --configure")
-        # log odmowy startu: jedna linia JSON, tylko gdy problems nie jest puste
+        info("Fix the configuration or run: freecode --configure")
+        # log of a refused start: one JSON line, only when problems is not empty
         entry = {
             "time": time.strftime("%Y-%m-%dT%H:%M:%S%z", time.localtime()),
             "cwd": directory,
@@ -916,9 +916,9 @@ def guard(directory):
 
 
 def refresh_env(directory):
-    """Opis komputera świeży: sprawdzany najwyżej raz na dobę albo po zmianie configu (model, kontekst).
+    """Keeps the computer description fresh: checked at most once a day or after a config change (model, context).
 
-    Wiek liczony od znacznika ENV_STAMP, nie od mtime AGENTS.md — sprawdzenie bez zmian nie rusza pliku.
+    Age counted from the ENV_STAMP marker, not the mtime of AGENTS.md — a check without changes does not touch the file.
     """
     if not os.path.isfile(AGENTS_FILE):
         return
@@ -932,58 +932,58 @@ def refresh_env(directory):
 
 
 def refusal(argv):
-    """Powód, dla którego freecode nie przekaże polecenia do opencode (sieć, wystawienie serwera); None = wolno."""
-    for i, a in enumerate(argv):         # `--server URL` omija usługę i kontrolę configu — tylko lokalny adres
+    """Reason why freecode will not pass a command to opencode (network, exposing a server); None = allowed."""
+    for i, a in enumerate(argv):         # `--server URL` bypasses the service and the config check — local address only
         url = a.split("=", 1)[1] if a.startswith("--server=") else argv[i + 1] if a == "--server" and i + 1 < len(argv) else None
         if url and not is_local(url):
-            return f"`--server {url}`: adres nie jest lokalny (własny host dopisz do FREECODE_HOSTS)"
+            return f"`--server {url}`: the address is not local (add your own host to FREECODE_HOSTS)"
     words = [a for a in argv if not a.startswith("-")]
     sub, sub2 = (words + [None, None])[:2]
     if sub in ("upgrade", "update", "auth", "service", "acp"):
-        return f"`{sub}` łączy się z siecią albo z usługą w tle"
+        return f"`{sub}` connects to the network or to the background service"
     if sub == "uninstall":
-        return "`uninstall` usuwa opencode"
+        return "`uninstall` removes opencode"
     if sub == "plugin" and sub2 in ("add", "check", "update"):
-        return f"`plugin {sub2}` pobiera pakiety z sieci"
+        return f"`plugin {sub2}` downloads packages from the network"
     if sub == "mcp" and sub2 == "auth":
-        return "`mcp auth` loguje do zdalnego serwera MCP"
+        return "`mcp auth` logs in to a remote MCP server"
     if sub == "pair":
         if "--remote" in argv:
-            return "`pair --remote` wystawia serwer do internetu"
+            return "`pair --remote` exposes the server to the internet"
         for i, a in enumerate(argv):
             url = a.split("=", 1)[1] if a.startswith("--url=") else argv[i + 1] if a == "--url" and i + 1 < len(argv) else None
             if url and not is_local(url):
-                return f"`pair --url {url}`: adres nie jest lokalny"
+                return f"`pair --url {url}`: the address is not local"
     if sub == "session" and sub2 == "import":
         src = words[2] if len(words) > 2 else ""
         if "://" in src and not is_local(src):
-            return f"`session import {src}`: adres nie jest lokalny"
+            return f"`session import {src}`: the address is not local"
     return None
 
 
 def launch_args(oc, argv, directory):
-    """Polecenie opencode: TUI przez usługę albo prywatny serwer, `run` zawsze standalone. None = odmowa."""
+    """The opencode command: TUI via the service or a private server, `run` always standalone. None = refused."""
     os.environ["OPENCODE_DISABLE_AUTOUPDATE"] = "1"
     os.environ["OPENCODE_DISABLE_MODELS_FETCH"] = "1"
     info(color(2, describe(oc)))
     sub = argv[0] if argv and not argv[0].startswith("-") and not os.path.isdir(argv[0]) else None
     why = refusal(argv)
     if why:
-        info(f"freecode: {why} — użyj zwykłego opencode"); return None
+        info(f"freecode: {why} — use plain opencode"); return None
     if sub is None:                       # TUI
         own = "--standalone" in argv or any(a == "--server" or a.startswith("--server=") for a in argv)
         why = None if own else service_mode(oc, directory)
         if own or why is None:
-            args = [oc, *argv]            # usługa w tle: ta sama sesja w terminalu i na telefonie
+            args = [oc, *argv]            # background service: the same session in the terminal and on the phone
         else:
-            info(color(33, f"freecode: prywatny serwer — {why}"))
+            info(color(33, f"freecode: private server — {why}"))
             args = [oc, "--standalone", *argv]
     elif sub == "run":
         args = [oc, "run", "--standalone", *argv[1:]]
     else:
         args = [oc, *argv]
     if os.environ.get("WEZTERM_PANE") and sys.stdout.isatty():
-        # WezTerm: znacznik karty (user var `freecode`) — format-window-title może pokazać „freecode” zamiast „OpenCode”
+        # WezTerm: tab marker (user var `freecode`) — format-window-title can show "freecode" instead of "OpenCode"
         sys.stdout.write("\033]1337;SetUserVar=freecode=MQ==\007"); sys.stdout.flush()
     return args
 
@@ -998,12 +998,12 @@ def main(argv):
              "--optymalizuj": "--configure"}.get(a, a) for a in argv[:1]] + argv[1:]
     if argv[:1] == ["--env"]:
         if not write_env():
-            info(color(2, f"  środowisko bez zmian ({AGENTS_FILE})"))
+            info(color(2, f"  environment unchanged ({AGENTS_FILE})"))
         return 0
     if argv[:1] == ["--configure"]:
         stages = "".join(argv[1:]) or "1234"
         if not stages or any(n not in STAGES for n in stages):
-            info("  etapy: 1 połączenie, 2 wzorzec, 3 styl pracy, 4 opis komputera (np. freecode --configure 3)"); return 1
+            info("  stages: 1 connection, 2 template, 3 work style, 4 computer description (e.g. freecode --configure 3)"); return 1
         return configure(stages)
     if argv[:1] == ["--set"]:
         return set_prefs(argv[1:])
@@ -1018,11 +1018,11 @@ def main(argv):
     if not guard(directory):
         return 1
     if argv[:1] == ["--check"]:
-        info(color(32, "freecode: konfiguracja lokalna")); return 0
+        info(color(32, "freecode: configuration is local")); return 0
     refresh_env(directory)
     oc = os.environ.get("FREECODE_OPENCODE") or shutil.which("opencode")
     if not oc:
-        info("freecode: nie znaleziono opencode (npm i -g @opencode/cli)"); return 1
+        info("freecode: opencode not found (npm i -g @opencode/cli)"); return 1
     args = launch_args(oc, argv, directory)
     if args is None:
         return 1

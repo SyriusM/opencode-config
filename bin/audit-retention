@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Retencja ~/mempalace/audit: pliki *.jsonl starsze niż 30 dni (także w podkatalogach kategorii)
-# → ~/mempalace/audit-archive/audit-<data>.tar.gz, weryfikacja bajt w bajt, dopiero potem kasowanie.
-# Przenoś, nie kasuj: bez udanej weryfikacji nic nie znika.
+# Retention for ~/mempalace/audit: *.jsonl files older than 30 days (also in category subdirectories)
+# → ~/mempalace/audit-archive/audit-<date>.tar.gz, byte-for-byte verification, only then deletion.
+# Move, do not delete: nothing disappears without a successful verification.
 set -euo pipefail
 AUDIT="$HOME/mempalace/audit"
 ARCHIVE="$HOME/mempalace/audit-archive"

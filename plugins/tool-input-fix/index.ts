@@ -2,27 +2,27 @@ import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync } from
 import { homedir } from "node:os"
 import { basename, join, resolve } from "node:path"
 
-// TOOL-INPUT-FIX — poprawia typowe błędy wejścia lokalnych modeli ZANIM narzędzie ruszy
-// i przerywa pętle identycznych, błędnych wywołań. Źródło: audyt własnych błędów narzędzi
-// (najczęstsze: składnia execute i pętle tego samego wywołania).
+// TOOL-INPUT-FIX — fixes typical input mistakes of local models BEFORE the tool runs
+// and breaks loops of identical failing calls. Source: an audit of our own tool errors
+// (most common: execute syntax and loops of the same call).
 //
-//   execute.code: poprawka TYLKO gdy oryginał się nie parsuje i poprawka się parsuje:
+//   execute.code: fix ONLY when the original does not parse and the fix does:
 //     - ogon `</code>`, `</parameter>`, `</function>`, `</tool_call>` (wyciek szablonu Qwen3.5)
-//     - prefiks `code:` / płot ```js … ```
-//     - `\"` poza stringami (podwójnie escapowane cudzysłowy)
+//     - a `code:` prefix / a ```js … ``` fence
+//     - `\"` outside strings (double-escaped quotes)
 //   playwright_browser_click/hover/…: target `button[ref=f4e13]` → `f4e13`
 //   playwright_browser_wait_for: time w ms (≥100) → sekundy
-//   pętla: to samo wywołanie (narzędzie + wejście) padło już 2× → zamiast wykonania błąd STOP
+//   loop: the same call (tool + input) already failed 2× → a STOP error instead of running it
 //
-// Hook V2: ctx.tool.hook("execute.before"), zmiana przez `event.input = …` (tak robi wbudowany
-// plugin opencode 2.0.24). Nigdy nie rzucamy z hooka. Log: ~/.mempalace/hook_state/tool_input_fix.log
+// Hook V2: ctx.tool.hook("execute.before"), change via `event.input = …` (as the built-in
+// opencode 2.0.24 plugin does). We never throw from the hook. Log: ~/.mempalace/hook_state/tool_input_fix.log
 
 const HOME = homedir()
 const LOG = join(HOME, ".mempalace", "hook_state", "tool_input_fix.log")
 const MAX_REPEAT = 2
-// od którego STOP-u w sesji komunikat każe skończyć turę bez narzędzi
+// from which STOP in a session the message says to end the turn without tools
 const STOP_ESCALATE = 3
-// katalog domowy jako regex (bez wpisanej nazwy użytkownika): „home/user/…” i „/home/USER/…”
+// home directory as a regex (no user name typed in): "home/user/…" and "/home/USER/…"
 const escRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
 const HOME_NOSLASH_RE = new RegExp("^" + escRe(HOME.slice(1)) + "/", "i")
 const HOME_ABS_RE = new RegExp("^" + escRe(HOME) + "/", "i")
@@ -34,8 +34,8 @@ function log(line: string) {
   } catch {}
 }
 
-// pełne wejście przy wskazówce — baza opencode zapisuje już podmienioną komendę, więc oryginał
-// (materiał na pary błąd→poprawka) zostaje tylko tutaj; jeden obiekt JSON na linię
+// full input next to the hint — the opencode DB already stores the replaced command, so the original
+// (material for error→fix pairs) only survives here; one JSON object per line
 const HINT_LOG = join(HOME, ".mempalace", "hook_state", "tool_input_fix-hints.jsonl")
 const HINT_LOG_MAX = 20000
 
@@ -51,7 +51,7 @@ function logHint(session: string, tool: string, name: string, input: unknown, te
 
 function parses(code: string): boolean {
   try {
-    // tylko parsowanie, bez wykonania; ciało funkcji async = top-level await i return OK
+    // parse only, no execution; an async function body = top-level await and return are OK
     new Function(`return (async () => {\n${code}\n})`)
     return true
   } catch {
@@ -65,7 +65,7 @@ const FENCE = /^\s*```[a-z]*\s*\n([\s\S]*?)\n?```\s*$/i
 
 function fixCode(code: string): { code: string; fixes: string[] } {
   if (typeof code !== "string") return { code, fixes: [] }
-  // ```js … ``` parsuje się jako tagged template, więc płot zdejmujemy zawsze
+  // ```js … ``` parses as a tagged template, so we always strip the fence
   const fm = code.match(FENCE)
   if (fm && parses(fm[1])) return { code: fm[1], fixes: ["plot-md"] }
   if (parses(code)) return { code, fixes: [] }
@@ -80,14 +80,14 @@ function fixCode(code: string): { code: string; fixes: string[] } {
   }
   step("xml-tail", (s) => s.replace(TAIL, ""))
   step("code-prefix", (s) => s.replace(/^\s*code\s*:\s*/, ""))
-  // `;\\n` między instrukcjami przy poprawnych napisach (35B) — zamieniamy tylko po ; { } )
+  // `;\\n` between statements with correct strings (35B) — replace only after ; { } )
   if (!parses(c)) step("newline-between-statements", (s) => {
     const n = s.replace(/([;{})])\\n/g, "$1\n")
     return parses(n) ? n : s
   })
-  // cały kod escapowany o jeden poziom za dużo (`\"`, `\\n`, `\\\\[` w regexach) → zdejmij jeden poziom
-  // unescape-poziom: JSON.parse na całym bloku (działa gdy brak regexów z `\`)
-  // escape-cudzyslowow: proste \`\"→"\` (fallback gdy unescape-poziom nie dał rezultatu lub zepsuł regexy)
+  // the whole code escaped one level too much (`\"`, `\\n`, `\\\\[` in regexes) → remove one level
+  // unescape-level: JSON.parse on the whole block (works when there are no regexes with `\`)
+  // escape-quotes: plain \`\"→"\` (fallback when unescape-level gave nothing or broke regexes)
   if (!parses(c)) {
     let u: string | undefined
     try {
@@ -95,20 +95,20 @@ function fixCode(code: string): { code: string; fixes: string[] } {
       if (typeof j === "string" && j !== c) u = j
     } catch {}
     if (u !== undefined && !parses(u)) {
-      // unescape zwrócił coś innego niż oryginał, ale nie parsuje — spróbuj escape-cudzyslowow jako fallback
+      // unescape returned something different from the original but it does not parse — try escape-quotes as fallback
       const e = u.replace(/\\"/g, '"')
       if (e !== u && parses(e)) { c = e; fixes.push("unescape-level→escape-quotes") }
     } else if (u !== undefined) { c = u; fixes.push("unescape-level") }
   }
   if (!parses(c)) step("escape-quotes", (s) => s.replace(/\\"/g, '"'))
-  if (!parses(c)) return { code, fixes: [] } // nie umiemy — oddajemy oryginał
+  if (!parses(c)) return { code, fixes: [] } // we can't fix it — return the original
   return { code: c, fixes }
 }
 
-// poprawki nazw w kodzie, niezależnie od parsowania (wynik „Unknown tool”)
-// Uwaga: wywołania MCP z wnętrza `execute` są dekodowane schematem PRZED hookiem — nieznane klucze
-// (`ref`, `elements`, `selector`) giną, a złe typy (`target:{ref}`) padają. Te poprawki muszą iść
-// w tekście kodu. Brakujące klucze (`action`, `oldText`) poprawia fixMcp w hooku.
+// name fixes in the code, regardless of parsing (result "Unknown tool")
+// Note: MCP calls from inside `execute` are decoded by the schema BEFORE the hook — unknown keys
+// (`ref`, `elements`, `selector`) are lost, and wrong types (`target:{ref}`) fail. These fixes must happen
+// in the code text. Missing keys (`action`, `oldText`) are fixed by fixMcp in the hook.
 function fixNames(code: string): { code: string; fixes: string[] } {
   let c = code
   const fixes: string[] = []
@@ -119,7 +119,7 @@ function fixNames(code: string): { code: string; fixes: string[] } {
       fixes.push(name)
     }
   }
-  // wbudowany webfetch nie istnieje w `execute`; MCP fetch ma te same argumenty (url, max_length, start_index, raw)
+  // the built-in webfetch does not exist in `execute`; MCP fetch has the same arguments (url, max_length, start_index, raw)
   step("webfetch→fetch", /\btools\.webfetch\.webfetch\s*\(/g, "tools.fetch.fetch(")
   step("double-namespace", /\btools\.(filesystem|mempalace|playwright|fetch)\.\1\./g, "tools.$1.")
   // {target|element: {ref: X}} → target: X
@@ -130,7 +130,7 @@ function fixNames(code: string): { code: string; fixes: string[] } {
     /(\bbrowser_(?:click|type|hover|select_option|drag)\s*\(\s*\{\s*)(ref|selector)(\s*:)/g,
     "$1target$3",
   )
-  // `element` to w Playwrighcie opis słowny, nie identyfikator — zamieniamy tylko, gdy wartość wygląda jak ref (e13, f5e43)
+  // in Playwright `element` is a verbal description, not an identifier — replace only when the value looks like a ref (e13, f5e43)
   step(
     "element-ref→target",
     /(\bbrowser_(?:click|type|hover|select_option|drag)\s*\(\s*\{\s*)element(\s*:\s*["'](?:f\d+)?e\d+["'])/g,
@@ -148,9 +148,9 @@ function fixNames(code: string): { code: string; fixes: string[] } {
 
 const REF = /\[ref=([a-z0-9]+)\]|^ref=([a-z0-9]+)$/i
 
-// ── Cyrylickie homoglify w ścieżkach ──────────────────────────────────────────────────────────────
-// Model wpisał „ed-trade-ovelay" (U+0435 zamiast U+0065 e) → ENOENT.
-// Normalizujemy TYLKO fragmenty command, które wyglądają na ścieżki (zawierają /).
+// ── Cyrillic homoglyphs in paths ──────────────────────────────────────────────────────────────
+// The model typed "ed-trade-ovelay" (U+0435 instead of U+0065 e) → ENOENT.
+// We normalize ONLY the parts of command that look like paths (contain /).
 const CYR_HOGLYPHS: Record<string, string> = {
   "\u0430": "a", "\u0435": "e", "\u043e": "o", "\u0440": "p",
   "\u0441": "c", "\u0443": "y", "\u0445": "x", "\u0456": "i",
@@ -165,7 +165,7 @@ function normalizeCyrHomoGlyphs(command: string): string {
   return command.replace(HOMOGLYPH_RE, (m) => CYR_HOGLYPHS[m] ?? m)
 }
 
-// ref ze snapshotu w dowolnym przebraniu → goły string `f4e13`
+// a snapshot ref in any disguise → a bare string `f4e13`
 function asRef(v: unknown): string | undefined {
   if (v && typeof v === "object" && typeof (v as any).ref === "string") v = (v as any).ref
   if (typeof v !== "string") return undefined
@@ -173,7 +173,7 @@ function asRef(v: unknown): string | undefined {
   return m ? m[1] ?? m[2] : v
 }
 
-// narzędzia przeglądarki: nasz playwright_browser_* i wbudowany browser_browser_* (ten sam schemat)
+// browser tools: our playwright_browser_* and the built-in browser_browser_* (same schema)
 const BROWSER = /^(playwright|browser)_browser_/
 const TARGET_TOOLS = /_(click|type|hover|select_option|press_key|drag)$/
 const FIELD_TYPES = ["textbox", "checkbox", "radio", "combobox", "slider"]
@@ -190,14 +190,14 @@ function fixMcp(tool: string, input: any): string[] {
     if (input.code !== oldCode) fixes.push("time-ms→s")
   }
   if (BROWSER.test(tool)) {
-    // zablokuj browser_navigate z protokołami, których Playwright nie obsługuje → ERR_ABORTED
+    // block browser_navigate with protocols Playwright does not support → ERR_ABORTED
     if (/_navigate$/.test(tool) && typeof input.url === "string") {
       if (/^(steam|file|data|chrome|about):\/\//i.test(input.url)) {
         input._block = true
         fixes.push("navigate-protocol-block")
       }
     }
-    // browser_type bez targetu/ref/element/selector — model podaje tylko tekst, nie da się naprawić
+    // browser_type without target/ref/element/selector — the model gives only text, cannot be fixed
     if (/_type$/.test(tool) && input.target === undefined && typeof input.text === "string" && !input.ref && !input.element && !input.selector) {
       input._block = true
       fixes.push("type-without-target")
@@ -213,13 +213,13 @@ function fixMcp(tool: string, input: any): string[] {
           fixes.push("target-from-ref/element")
         }
       } else {
-        // "ref=f19e2" → "f19e2" (model podaje ref= jako prefiks wartości target)
+        // "ref=f19e2" → "f19e2" (the model gives ref= as a prefix of the target value)
         const refMatch = input.target.match(/^ref=([a-z0-9]+)$/i)
         if (refMatch && refMatch[1] !== input.target) {
           input.target = refMatch[1]
           fixes.push("target-ref-prefix")
         } else {
-          // "button[ref=f4e13]" → "f4e13" (model dodaje typ elementu przed [ref=...])
+          // "button[ref=f4e13]" → "f4e13" (the model adds the element type before [ref=...])
           const cssRef = input.target.match(/\[ref=([a-z0-9]+)\]/i)
           if (cssRef && cssRef[1] !== input.target) {
             input.target = cssRef[1]
@@ -280,7 +280,7 @@ function fixMcp(tool: string, input: any): string[] {
       fixes.push("time-ms→s")
     }
   }
-  // MCP filesystem nie rozwija `~` → „ENOENT … /home/user/<cwd>/~/…”
+  // MCP filesystem does not expand `~` → "ENOENT … /home/user/<cwd>/~/…"
   if (tool.startsWith("filesystem_")) {
     const home = (v: unknown) => (typeof v === "string" && /^~(\/|$)/.test(v) ? HOME + v.slice(1) : v)
     for (const k of ["path", "source", "destination"]) {
@@ -315,7 +315,7 @@ function fixMcp(tool: string, input: any): string[] {
       return g
     })
   }
-  // homoglify cyrylickie w ścieżkach (np. „ed-trade-ovelay" z U+0435)
+  // Cyrillic homoglyphs in paths (e.g. "ed-trade-ovelay" with U+0435)
   if (tool === "shell" && typeof input.command === "string") {
     const cleaned = normalizeCyrHomoGlyphs(input.command)
     if (cleaned !== input.command) {
@@ -323,7 +323,7 @@ function fixMcp(tool: string, input: any): string[] {
       fixes.push("cyr-homoglyph→latin(command)")
     }
   }
-  // filePath: read/write/edit — poprawiamy TYLKO gdy oryginał nie istnieje, a znormalizowana wersja istnieje
+  // filePath: read/write/edit — fix ONLY when the original does not exist and the normalized version does
   const filePath = input.filePath ?? input.path
   if (typeof filePath === "string" && filePath.includes("/")) {
     const cleaned = normalizeCyrHomoGlyphs(filePath)
@@ -336,14 +336,14 @@ function fixMcp(tool: string, input: any): string[] {
   return fixes
 }
 
-// ── WSKAZÓWKI W CHWILI BŁĘDU ──────────────────────────────────────────────────────────────────────
-// Błędy semantyczne: składnia poprawna, ale model używa czegoś, czego w tym środowisku nie ma (Node w `execute`,
-// sudo, apt, zapis do /etc…). Zamiast pozwolić na niejasny błąd, nie wykonujemy wywołania i zwracamy JEDNO zdanie
-// z gotowym poprawnym przykładem (małe modele powtarzają to, co widzą — dlatego przykład, nie sam zakaz).
-// Każda wskazówka najwyżej 2× na sesję; potem wywołanie idzie normalnie. Wzorce z bazy błędów opencode (10-2026).
+// ── HINTS AT THE MOMENT OF THE ERROR ──────────────────────────────────────────────────────────────
+// Semantic errors: the syntax is right, but the model uses something this environment does not have (Node in `execute`,
+// sudo, apt, writing to /etc…). Instead of letting an unclear error happen, we skip the call and return ONE sentence
+// with a ready correct example (small models repeat what they see — hence an example, not just a ban).
+// Each hint at most 2× per session; after that the call runs normally. Patterns from the opencode error DB (10-2026).
 type Hint = { name: string; re: RegExp; text: string; always?: boolean }
 
-// usuwa napisy i komentarze, żeby np. `document.title` wewnątrz browser_evaluate nie było fałszywym trafieniem
+// strips strings and comments so that e.g. `document.title` inside browser_evaluate is not a false hit
 function stripLiterals(src: string): string {
   return src
     .replace(/\/\*[\s\S]*?\*\//g, " ")
@@ -352,29 +352,29 @@ function stripLiterals(src: string): string {
 }
 
 const HINTS_EXECUTE: Hint[] = [
-  // wbudowane narzędzia to osobne wywołania, nie `tools.*` w execute — Gemma 4 (10-22) wołała tools.shell/tools.read
-  // w kółko (search ich nie znajduje, więc model zgadywał dalej); blokada bez limitu, bo takie wywołanie i tak pada
+  // built-in tools are separate calls, not `tools.*` in execute — Gemma 4 (10-22) called tools.shell/tools.read
+  // over and over (search cannot find them, so the model kept guessing); blocked without a limit, since such a call fails anyway
   { name: "native-tool-in-execute", always: true,
     re: /(?<![\w.])tools\.(shell|bash|read|edit|write|grep|glob|list|skill|question|subagent|task|todowrite|webfetch)\s*(?:\.\s*\w+\s*)?\(/,
-    text: 'shell, read, edit, write, grep i skill NIE są dostępne w execute (tools.shell / tools.read nie istnieją i search ich nie znajdzie). To osobne narzędzia: zamiast execute wywołaj wprost narzędzie shell z argumentem command: "ls /home/user/katalog", a plik przeczytaj narzędziem read z filePath. W execute zostają tylko tools.playwright.*, tools.fetch.*, tools.mempalace.* i inne z search.' },
+    text: 'shell, read, edit, write, grep and skill are NOT available in execute (tools.shell / tools.read do not exist and search will not find them). They are separate tools: instead of execute, call the shell tool directly with the argument command: "ls /home/user/dir", and read a file with the read tool and filePath. Only tools.playwright.*, tools.fetch.*, tools.mempalace.* and others from search stay in execute.' },
   { name: "python-in-execute", re: /^\s*(def \w+\(|import (\w+(\s+as\s+\w+)?)(\s*,\s*(\w+(\s+as\s+(\w))?))*\s*$|from [\w.]+ import |print\s*\()/m,
-    text: 'execute rozumie tylko JavaScript. Wypisywanie: console.log("tekst"). Python uruchom narzędziem shell: python3 -c "print(1)".' },
+    text: 'execute understands only JavaScript. Printing: console.log("text"). Run Python with the shell tool: python3 -c "print(1)".' },
   { name: "python-import", re: /^\s*import\s+(?:\w+[\s\S]*?\s+from\s+|[{*])/m,
-    text: 'To JavaScript (ES modules), nie Python. W execute: const fs = await import("fs"); albo plik przeczytaj osobnym narzędziem read (filePath), nie z execute.' },
+    text: 'This is JavaScript (ES modules), not Python. In execute: const fs = await import("fs"); or read the file with the separate read tool (filePath), not from execute.' },
   { name: "require-import", re: /\brequire\s*\(|\bawait\s+import\s*\(/,
-    text: 'W execute nie ma Node (brak require/import). Plik: osobne narzędzie read (filePath). Polecenia systemowe: osobne narzędzie shell.' },
+    text: 'There is no Node in execute (no require/import). A file: the separate read tool (filePath). System commands: the separate shell tool.' },
   { name: "timer", re: /\b(setTimeout|setInterval|setImmediate)\s*\(/,
-    text: 'W execute nie ma timerów. Czekanie: await tools.playwright.browser_wait_for({time: 2}) (sekundy), a poza przeglądarką narzędzie shell: sleep 2.' },
+    text: 'There are no timers in execute. Waiting: await tools.playwright.browser_wait_for({time: 2}) (seconds), outside the browser the shell tool: sleep 2.' },
   { name: "page-playwright", re: /(^|[^.\w])(page|browser|context)\.(title|goto|click|fill|type|evaluate|locator|url|content|waitFor\w*|newPage|close|screenshot)\s*\(/,
-    text: 'Nie ma obiektu page/browser. Użyj: await tools.playwright.browser_navigate({url: "https://example.com"}); const s = await tools.playwright.browser_snapshot(); console.log(s) — tytuł i adres są w zrzucie („Page Title”, „Page URL”).' },
+    text: 'There is no page/browser object. Use: await tools.playwright.browser_navigate({url: "https://example.com"}); const s = await tools.playwright.browser_snapshot(); console.log(s) — the title and address are in the snapshot ("Page Title", "Page URL").' },
   { name: "fs-process", re: /(^|[^.\w])(fs|process|child_process|os)\.\w+\s*\(/,
-    text: 'W execute nie ma fs/process. Pliki: osobne narzędzie read (filePath); polecenia: narzędzie shell.' },
+    text: 'There is no fs/process in execute. Files: the separate read tool (filePath); commands: the shell tool.' },
   { name: "websearch-in-execute", re: /\btools\.websearch\./,
-    text: 'websearch jest wyłączony. Szukaj w przeglądarce: await tools.playwright.browser_navigate({url: "https://duckduckgo.com/?q=SLOWA+PLUSAMI"}); const r = await tools.playwright.browser_evaluate({function: "() => [...document.querySelectorAll(\'a[data-testid=result-title-a]\')].map(a => a.href + \' | \' + a.innerText).slice(0, 10).join(\'\\\\n\')"}); console.log(r)' },
+    text: 'websearch is disabled. Search in the browser: await tools.playwright.browser_navigate({url: "https://duckduckgo.com/?q=WORDS+WITH+PLUSES"}); const r = await tools.playwright.browser_evaluate({function: "() => [...document.querySelectorAll(\'a[data-testid=result-title-a]\')].map(a => a.href + \' | \' + a.innerText).slice(0, 10).join(\'\\\\n\')"}); console.log(r)' },
 ]
 
-// Po „Could not find oldString”: pokaż, jak naprawdę wygląda w pliku pierwsza niepusta linia oldString
-// (porównanie bez białych znaków na brzegach, bo zwykle psuje się wcięcie). Tani: jedno przejście po pliku.
+// After "Could not find oldString": show what the first non-empty line of oldString really looks like in the file
+// (compared without surrounding whitespace, because indentation is what usually breaks). Cheap: one pass over the file.
 const similarLines = (path: unknown, oldString: unknown): string | undefined => {
   if (typeof path !== "string" || typeof oldString !== "string") return
   const needle = oldString.split("\n").map((l) => l.trim()).find((l) => l.length >= 4)
@@ -388,15 +388,15 @@ const similarLines = (path: unknown, oldString: unknown): string | undefined => 
   if (src.length > 500_000) return
   const lines = src.split("\n")
   const i = lines.findIndex((l) => l.trim() === needle)
-  if (i < 0) return `PODPOWIEDŹ: linii "${needle.slice(0, 120)}" nie ma w pliku nawet po zignorowaniu wcięć — wczytaj plik narzędziem read i skopiuj fragment dokładnie.`
+  if (i < 0) return `HINT: the line "${needle.slice(0, 120)}" is not in the file even ignoring indentation — read the file with the read tool and copy the fragment exactly.`
   const n = oldString.split("\n").length
   const fragment = lines.slice(i, i + Math.min(n, 8)).join("\n")
-  return `PODPOWIEDŹ: w pliku (linia ${i + 1}) ten fragment wygląda dokładnie tak — skopiuj go z tymi wcięciami jako oldString:\n${fragment.slice(0, 1500)}`
+  return `HINT: in the file (line ${i + 1}) this fragment looks exactly like this — copy it with this indentation as oldString:\n${fragment.slice(0, 1500)}`
 }
 
-// Po „Found N matches”: pokazanie samej linii (similarLines) kazało skopiować ten sam nieunikalny fragment
-// (10-28 Gemma, zad. 27: 3× ten sam błąd → STOP). Dla każdego miejsca podaj najbliższą wyższą linię, która jest
-// w pliku tylko raz (np. `def check_delta(resp):`) — od niej do zmienianej linii oldString jest unikalny.
+// After "Found N matches": showing just the line (similarLines) made the model copy the same non-unique fragment
+// (10-28 Gemma, task 27: the same error 3× → STOP). For each spot give the nearest line above that is
+// only once in the file (e.g. `def check_delta(resp):`) — from it down to the changed line oldString is unique.
 export const multiMatchHint = (path: unknown, oldString: unknown): string | undefined => {
   if (typeof path !== "string" || typeof oldString !== "string" || !oldString.trim()) return
   let src: string
@@ -419,33 +419,33 @@ export const multiMatchHint = (path: unknown, oldString: unknown): string | unde
     spots.push(`- linia ${i + 1}:\n${lines.slice(j, i + n).join("\n").slice(0, 600)}`)
   }
   if (!spots.length) return
-  return `PODPOWIEDŹ: ten oldString występuje w pliku kilka razy. Do oldString dołącz linie powyżej, aż do takiej, ` +
-    `która jest w pliku tylko raz — wybierz miejsce, które masz zmienić, i skopiuj cały jego fragment:\n${spots.join("\n")}\n` +
-    `NIE używaj replaceAll, jeśli zmiana dotyczy tylko części tych miejsc — zmień każde osobnym edit.`
+  return `HINT: this oldString occurs in the file several times. Add the lines above to oldString, up to one ` +
+    `that occurs in the file only once — pick the spot you need to change and copy its whole fragment:\n${spots.join("\n")}\n` +
+    `Do NOT use replaceAll if the change concerns only some of these spots — change each with a separate edit.`
 }
 
-// Po „Could not find oldString” w pliku, którego model w tej sesji nie wczytał (15% błędów 30 dni: never-read)
-// albo wczytał tylko kawałkiem offset/limit (9%): powiedz to wprost, zanim spróbuje znowu z pamięci.
+// After "Could not find oldString" in a file the model has not read in this session (15% of errors in 30 days: never-read)
+// or read only partly with offset/limit (9%): say so plainly before it tries again from memory.
 const normPath = (p: unknown) => (typeof p === "string" && p ? resolve(p.replace(/^~(?=\/)/, homedir())) : "")
 const unreadFileHint = (path: string, readState: "never" | "partial") =>
   readState === "never"
-    ? `UWAGA: w tej sesji nie wczytałeś pliku ${path} — oldString pochodzi z pamięci albo zgadywania. ` +
-      `NAJPIERW wywołaj read na tym pliku, potem skopiuj oldString dosłownie z wyniku (bez numerów linii "N: ").`
-    : `UWAGA: plik ${path} wczytałeś tylko fragmentami (offset/limit) — zmieniane miejsce mogło być poza nimi. ` +
-      `Wczytaj read okolicę, którą zmieniasz, i skopiuj oldString dosłownie z wyniku (bez numerów linii "N: ").`
+    ? `NOTE: you have not read the file ${path} in this session — oldString comes from memory or a guess. ` +
+      `FIRST call read on this file, then copy oldString verbatim from the result (without the "N: " line numbers).`
+    : `NOTE: you read the file ${path} only in parts (offset/limit) — the place you are changing may be outside them. ` +
+      `read the area you are changing and copy oldString verbatim from the result (without the "N: " line numbers).`
 
-// Grupa C (11-04 self-repair: HINT-oldString docierał, model i tak powtarzał oldString z pamięci):
-// od 2. „Could not find oldString” w TYM SAMYM pliku bez read pomiędzy — twarda notka „następne wywołanie = read”.
-// Licznik zeruje udany read/write/edit tego pliku. Edit-u nie da się zablokować w before (patrz deliver), więc notka.
+// Group C (11-04 self-repair: the oldString HINT arrived, the model still repeated oldString from memory):
+// from the 2nd "Could not find oldString" in THE SAME file without a read in between — a hard note "next call = read".
+// The counter is reset by a successful read/write/edit of that file. Edit cannot be blocked in before (see deliver), hence a note.
 export const oldStringRepeatNote = (n: number, path: string): string | undefined =>
   n < 2
     ? undefined
-    : `\nSTOP: to już ${n}. nieudany edit pliku ${path} („Could not find oldString”) bez wczytania go pomiędzy. ` +
-      `Twoja pamięć treści tego pliku jest NIEAKTUALNA. Następne wywołanie MA BYĆ read na ${path} (cały plik albo okolica zmiany). ` +
-      `Dopiero potem edit z oldString skopiowanym dosłownie z wyniku read (bez numerów linii "N: "). ` +
-      `Jeśli zmiana jest duża — write całego pliku po read.`
+    : `\nSTOP: this is failed edit no. ${n} of the file ${path} ("Could not find oldString") without reading it in between. ` +
+      `Your memory of this file's content is OUTDATED. The next call MUST be read on ${path} (the whole file or the area of the change). ` +
+      `Only then edit with oldString copied verbatim from the read result (without the "N: " line numbers). ` +
+      `If the change is large — write the whole file after read.`
 
-// glob (*?[) traktujemy jak istniejącą ścieżkę — model właśnie sprawdza, nie zgaduje
+// a glob (*?[) is treated as an existing path — the model is checking, not guessing
 const pathExists = (p: string) => {
   if (/[*?[]/.test(p)) return true
   try {
@@ -455,21 +455,21 @@ const pathExists = (p: string) => {
   }
 }
 
-// znajdź najbliższą istniejącą ścieżkę (dla hinta "czy chodziło o…")
-// 1) idź wyżej, aż znajdziesz istniejący katalog
-// 2) w nim wyszukaj najbliższą nazwę (homo-glyph + podobieństwo)
+// find the nearest existing path (for the "did you mean…" hint)
+// 1) go up until an existing directory is found
+// 2) in it look for the nearest name (homoglyph + similarity)
 const nearestPath = (path: string): string | null => {
   try {
     const abs = path.replace(/^~(?=\/|$)/, homedir()).replace(/\/+$/, "")
     const parts = abs.split("/").filter(Boolean)
     let foundParent = false
-    // znajdź pierwszy brakujący segment (idź od dołu, zatrzymaj się na pierwszym istniejącym rodzicu)
+    // find the first missing segment (go from the bottom, stop at the first existing parent)
     for (let i = parts.length - 1; i >= 0; i--) {
       const parent = "/" + parts.slice(0, i).join("/")
       const child = parts[i]
       if (!pathExists(parent)) continue
       foundParent = true
-      // rodzic istnieje — szukaj najbliższego dziecka
+      // the parent exists — look for the nearest child
       const kids = readdirSync(parent)
       const childNorm = normalizeCyrHomoGlyphs(child)
       const maxDist = Math.max(2, Math.floor(childNorm.length / 4))
@@ -481,7 +481,7 @@ const nearestPath = (path: string): string | null => {
           break
         }
       }
-      // 2) najbliższe po edit distance z progiem
+      // 2) nearest by edit distance with a threshold
       let best: string | null = null
       let bestDist = Infinity
       for (const k of kids) {
@@ -498,7 +498,7 @@ const nearestPath = (path: string): string | null => {
         const result = join(parent, best, ...parts.slice(i + 1))
         if (pathExists(result)) return result
       }
-      // po przetworzeniu pierwszego istniejącego rodzica — koniec (bez dalszego wspinania)
+      // after processing the first existing parent — done (no further climbing)
       break
     }
     return null
@@ -507,14 +507,14 @@ const nearestPath = (path: string): string | null => {
   }
 }
 
-// komenda zmieniająca pliki + „nie ma takiego pliku” = model ma zgłosić brak, a nie szukać zamiennika
+// a command that changes files + "no such file" = the model should report it missing, not look for a substitute
 const MUTATING_CMD = /(^|[;&|(]\s*)(sudo\s+)?((rm|rmdir|unlink|shred|truncate|mv|cp|ln|chmod|chown|touch)\s|sed\s+(-\w*\s+)*-i)/m
 const MISSING_FILE = /No such file or directory|Nie ma takiego pliku/i
 export function isMissingTarget(cmd: string, msg: string): boolean {
   return MUTATING_CMD.test(cmd) && MISSING_FILE.test(msg)
 }
-// łańcuch && + pusty wynik + kod błędu ≠ 0/1/124 = ciche niepowodzenie (np. brak pliku lub 2>/dev/null);
-// wyjątek exit 3 + systemctl = normalne „inactive” (nie jest cichym niepowodzeniem)
+// && chain + empty output + exit code ≠ 0/1/124 = a silent failure (e.g. missing file or 2>/dev/null);
+// exception exit 3 + systemctl = a normal "inactive" (not a silent failure)
 export function isSilentChainFailure(cmd: string, exit: unknown, msg: string): boolean {
   const bare = msg.replace(/\(no output\)/g, "").replace(/Exited with code -?\d+/g, "").trim()
   return !bare
@@ -523,67 +523,68 @@ export function isSilentChainFailure(cmd: string, exit: unknown, msg: string): b
     && / && /.test(cmd)
     && !(exit === 3 && /systemctl/.test(cmd))
 }
-// Błąd składni basha (niedomknięty cudzysłów, pętla bez done) = komenda w ogóle nie ruszyła.
-// 10-24 Bonsai 5× na długich jednolinijkowcach z zagnieżdżonymi cudzysłowami i heredokami.
+// Bash syntax error (unclosed quote, loop without done) = the command did not run at all.
+// 10-24 Bonsai 5× on long one-liners with nested quotes and heredocs.
+// Polish and English locale variants of the bash messages (the tool output follows the system locale)
 const SHELL_SYNTAX = /nieoczekiwany EOF podczas poszukiwania pasującego|niespodziewany koniec pliku|unexpected EOF while looking for matching|syntax error: unexpected end of file/i
 export function isShellSyntaxError(tool: string, msg: string): boolean {
   return (tool === "shell" || tool === "bash") && SHELL_SYNTAX.test(msg)
 }
 const SHELL_SYNTAX_NOTE =
-  "WSKAZÓWKA: błąd składni powłoki (niedomknięty cudzysłów albo pętla) — komenda NIE została wykonana, nic się nie zmieniło. " +
-  "Nie poprawiaj cudzysłowów w tej samej długiej linii. Zapisz komendy narzędziem write do ~/tmp-opencode/NAZWA.sh " +
-  "(jedna komenda na linię, kod Pythona do osobnego pliku .py) i uruchom: bash ~/tmp-opencode/NAZWA.sh"
+  "HINT: shell syntax error (unclosed quote or loop) — the command was NOT run, nothing changed. " +
+  "Do not fix the quotes in the same long line. Write the commands with the write tool to ~/tmp-opencode/NAME.sh " +
+  "(one command per line, Python code in a separate .py file) and run: bash ~/tmp-opencode/NAME.sh"
 
 const MISSING_TARGET_NOTE =
-  "WSKAZÓWKA: pliku albo katalogu z tej komendy NIE MA. Przy usuwaniu, przenoszeniu i zmianie plików NIE szukaj zamiennika " +
-  "(ten sam plik w innym katalogu, podobna nazwa) i nie wykonuj tej operacji na innym pliku niż wskazany przez użytkownika. " +
-  "Napisz użytkownikowi wprost, że ścieżka nie istnieje (podaj ją), i ewentualnie wymień podobne pliki, które widzisz — bez ruszania ich."
+  "HINT: the file or directory in this command does NOT exist. When deleting, moving or changing files do NOT look for a substitute " +
+  "(the same file in another directory, a similar name) and do not perform this operation on any file other than the one the user named. " +
+  "Tell the user plainly that the path does not exist (give it), and optionally list similar files you see — without touching them."
 
 const HINTS_SHELL: Hint[] = [
   { name: "js-in-shell", re: /^\s*(await\s+)?tools\.\w+\.\w+/,
-    text: 'To JavaScript, a shell to powłoka. Wywołania tools.* wykonuj narzędziem execute, np. code: const r = await tools.playwright.browser_navigate({url: "https://example.com"}); console.log(r)' },
+    text: 'This is JavaScript, and shell is a shell. Run tools.* calls with the execute tool, e.g. code: const r = await tools.playwright.browser_navigate({url: "https://example.com"}); console.log(r)' },
   { name: "guessed-path", re: /\bls\b(\s+-[a-zA-Z]*)?\s+["']?(\/home\/\w+(?:\/[^"'\s]*)?|~\/[^"'\s]*)/,
-    text: 'Model zgaduje ścieżki (Projekt/Projekti/Pobrane/Pulpit) zamiast sprawdzić ls. Sprawdź najpierw: ls ~/Projekt* lub ls ~/Pobran* i użyj poprawnej ścieżki.' },
+    text: 'You are guessing paths (Projekt/Projekti/Pobrane/Pulpit) instead of checking with ls. Check first: ls ~/Projekt* or ls ~/Pobran* and use the correct path.' },
   { name: "guessed-path", re: /\b(cat|head|tail|less|more)\b(\s+-\S+)*\s+(\/home\/\w+(?:\/[^"'\s]*)?|~\/[^"'\s]*)/,
-    text: 'Model zgaduje ścieżki (Projekt/Projekti/Pobrane/Pulpit) zamiast sprawdzić ls. Sprawdź najpierw: ls ~/Projekt* lub ls ~/Pobran* i użyj poprawnej ścieżki.' },
+    text: 'You are guessing paths (Projekt/Projekti/Pobrane/Pulpit) instead of checking with ls. Check first: ls ~/Projekt* or ls ~/Pobran* and use the correct path.' },
   { name: "ls-no-access", re: /\bls:\s*nie ma dostępu|File not found|Nie ma takiego pliku/i,
-    text: 'Model zgaduje ścieżki (Projekt/Projekti/Pobrane/Pulpit) zamiast sprawdzić ls. Sprawdź najpierw: ls ~/Projekt* lub ls ~/Pobran* i użyj poprawnej ścieżki.' },
+    text: 'You are guessing paths (Projekt/Projekti/Pobrane/Pulpit) instead of checking with ls. Check first: ls ~/Projekt* or ls ~/Pobran* and use the correct path.' },
   { name: "guessed-path", re: /\bfind\b(\s+-\S+)*\s+(\/home\/\w+(?:\/[^"'\s]*)?|~\/[^"'\s]*)/,
-    text: 'Model zgaduje ścieżki (Projekt/Projekti/Pobrane/Pulpit) zamiast sprawdzić ls. Sprawdź najpierw: ls ~/Projekt* lub ls ~/Pobran* i użyj poprawnej ścieżki.' },
+    text: 'You are guessing paths (Projekt/Projekti/Pobrane/Pulpit) instead of checking with ls. Check first: ls ~/Projekt* or ls ~/Pobran* and use the correct path.' },
   { name: "sudo", re: /(^|[;&|]\s*)sudo\b/,
-    text: 'sudo w narzędziach jest zablokowane. Przygotuj plik w katalogu domowym i podaj użytkownikowi JEDNĄ komendę do wykonania, np.: sudo cp ~/tmp-opencode/plik /etc/plik' },
+    text: 'sudo is blocked in the tools. Prepare the file in the home directory and give the user ONE command to run, e.g.: sudo cp ~/tmp-opencode/file /etc/file' },
   { name: "killing-services", re: /\b(pkill|killall)\b[^|;&>]*[\s'"](opencode|llama|brave|playwright)/,
-    text: 'Nie zabijaj opencode, modeli ani przeglądarki — to przerywa tę sesję albo pracę użytkownika. Sprawdź stan: pgrep -x llama-server; systemctl --user list-units "llama*". Zatrzymanie albo restart zaproponuj użytkownikowi.' },
+    text: 'Do not kill opencode, the models or the browser — that interrupts this session or the user\'s work. Check the state: pgrep -x llama-server; systemctl --user list-units "llama*". Suggest a stop or restart to the user.' },
   ...(existsSync("/usr/bin/pacman") ? [  { name: "apt", re: /\b(apt|apt-get)\s+(install|update|upgrade|remove)\b/,
-    text: 'To Arch (CachyOS), nie ma apt. Sprawdź pakiet: pacman -Ss NAZWA albo pacman -Qi NAZWA. Instalację (sudo pacman -S NAZWA) podaj użytkownikowi do wykonania.' }] : []),
+    text: 'This is Arch (CachyOS), there is no apt. Check a package: pacman -Ss NAME or pacman -Qi NAME. Give the install (sudo pacman -S NAME) to the user to run.' }] : []),
   { name: "write-to-system", re: />>?\s*\/(etc|usr|boot)\/|\btee\s+(-a\s+)?\/(etc|usr|boot)\/|\bsed\s+-i[^|;&]*\s\/(etc|usr|boot)\/|\b(cp|mv|install)\s[^|;&]*\s\/(etc|usr|boot)\/\S*\s*($|[;&|])/,
-    text: 'Do /etc, /usr i /boot nie da się pisać bez roota. Zapisz plik w ~/tmp-opencode/, pokaż go i podaj użytkownikowi JEDNĄ komendę: sudo cp ~/tmp-opencode/plik /etc/plik' },
+    text: '/etc, /usr and /boot cannot be written without root. Save the file in ~/tmp-opencode/, show it and give the user ONE command: sudo cp ~/tmp-opencode/file /etc/file' },
   { name: "kbuildsycoca", re: /\bkbuildsyscaches?6?\b/,
-    text: 'Polecenie nazywa się kbuildsycoca6: kbuildsycoca6 --noincremental' },
+    text: 'The command is called kbuildsycoca6: kbuildsycoca6 --noincremental' },
   { name: "guessed-path", re: /\b(cp|mv|install)\b[^|;&]*\s(\/home\/\w+(?:\/[^"'\s]*)?|~\/[^"'\s]*)\s[^|;&]*/,
-    text: 'Model zgaduje ścieżki (Projekt/Projekti/Pobrane/Pulpit) zamiast sprawdzić ls. Sprawdź najpierw: ls ~/Projekt* lub ls ~/Pobran* i użyj poprawnej ścieżki.' },
+    text: 'You are guessing paths (Projekt/Projekti/Pobrane/Pulpit) instead of checking with ls. Check first: ls ~/Projekt* or ls ~/Pobran* and use the correct path.' },
 ]
 
-// SUSPECT_HOME: segment pierwszego poziomu (np. ~/Projekt, /home/user/Pobran), który model
-// myli z istniejącym. Blokujemy tylko gdy sam segment nie istnieje (istniejący katalog
-// = sprawdzenie istnienia, nie zgadywanie — np. ~/Pobrane/brak.txt przy istniejącym ~/Pobrane).
-// (?:e|a)? + granica (?![A-Za-z]): Projekt/Pobran/Pobrane/Pobrania, ale nie ProjektX.
+// SUSPECT_HOME: a first-level segment (e.g. ~/Projekt, /home/user/Pobran) that the model
+// confuses with an existing one. We block only when the segment itself does not exist (an existing directory
+// = checking existence, not guessing — e.g. ~/Pobrane/missing.txt with an existing ~/Pobrane).
+// (?:e|a)? + boundary (?![A-Za-z]): Projekt/Pobran/Pobrane/Pobrania, but not ProjektX.
 const SUSPECT_HOME = /^(~|\/home\/[A-Za-z0-9_-]+)\/(Projekt|Projekti|Pojekty|Pulpit|Downloads|Desktop|Pobran)(?:e|a)?(?![A-Za-z])/i
 
-// TRYB NAPRAWCZY (sesja, w której model wczytał skill `self-repair` (dawniej `autodiag`) albo używa lesson-note / agent-rule / testu wtyczki):
-// osobista pamięć użytkownika (serwer MCP `mempalace` = ~/.mempalace) jest wtedy TYLKO DO ODCZYTU. Wnioski z napraw idą
-// do osobnego pałacu przez ~/bin/lesson-note. Poza trybem naprawczym model ma pełny dostęp jak dotąd.
-// Te wskazówki nie mają limitu powtórzeń — to blokada, nie podpowiedź.
+// REPAIR MODE (a session where the model loaded the `self-repair` skill (formerly `autodiag`) or uses lesson-note / agent-rule / a plugin test):
+// the user's personal memory (MCP server `mempalace` = ~/.mempalace) is then READ-ONLY. Lessons from repairs go
+// to a separate palace via ~/bin/lesson-note. Outside repair mode the model has full access as before.
+// These hints have no repeat limit — this is a block, not a hint.
 const HINTS_REPAIR_EXECUTE: Hint[] = [
   { name: "repair-memory-write", re: /\btools\.mempalace\.mempalace_(add_drawer|delete_drawer|kg_add|kg_invalidate|diary_write)\b/,
-    text: 'Trwa tryb naprawczy: pamięć użytkownika jest teraz tylko do odczytu (wolno mempalace_search). Wniosek z naprawy zapisz narzędziem shell: ~/bin/lesson-note dodaj "OBJAW: komunikat błędu" "PRZYCZYNA" "NAPRAWA" "PRZYKŁAD poprawnego wywołania"' },
+    text: 'Repair mode is on: the user\'s memory is read-only now (mempalace_search is allowed). Save the lesson from the repair with the shell tool: ~/bin/lesson-note add "SYMPTOM: error message" "CAUSE" "FIX" "EXAMPLE of a correct call"' },
 ]
 const HINTS_REPAIR_SHELL: Hint[] = [
   { name: "repair-mempalace-cli", re: /(^|[;&|]\s*)mempalace\s+(mine|init|split|compress|repair)\b/,
-    text: 'Trwa tryb naprawczy: nie zmieniaj pałacu użytkownika poleceniem mempalace. Znane rozwiązania: ~/bin/lesson-note szukaj "komunikat"; nowy wniosek: ~/bin/lesson-note dodaj "OBJAW" "PRZYCZYNA" "NAPRAWA"' },
+    text: 'Repair mode is on: do not change the user\'s palace with the mempalace command. Known fixes: ~/bin/lesson-note search "message"; a new lesson: ~/bin/lesson-note add "SYMPTOM" "CAUSE" "FIX"' },
 ]
 
-// czy to wywołanie włącza tryb naprawczy dla sesji
+// does this call turn on repair mode for the session
 function enablesRepair(tool: string, input: any): boolean {
   try {
     if (!input || typeof input !== "object") return false
@@ -595,9 +596,9 @@ function enablesRepair(tool: string, input: any): boolean {
 }
 
 // ── PODOBNE NAZWY (od 2026-11-12) ────────────────────────────────────────────────────────────────
-// Model przekręca identyfikatory przy przepisywaniu (TtsEngine→TssEngine, Bonsai 27B / Qwen 35B, KV q4_0).
-// write/edit: nazwa CamelCase z nowej treści, której nie ma w projekcie, a jest nazwa różna o 1 znak → „czy chodziło o”.
-// shell sed s/X/…/: X nie występuje w projekcie, a podobna nazwa tak → nie zamieniaj (model „naprawia” poprawne miejsca).
+// The model garbles identifiers when retyping them (TtsEngine→TssEngine, Bonsai 27B / Qwen 35B, KV q4_0).
+// write/edit: a CamelCase name from the new content that is not in the project, while a name 1 char away is → "did you mean".
+// shell sed s/X/…/: X does not occur in the project but a similar name does → do not replace (the model "fixes" correct places).
 const IDENT_RE = /\b[A-Za-z_][A-Za-z0-9_]*[A-Z][A-Za-z0-9_]*\b/g
 const CODE_EXT = /\.(kt|kts|java|ts|tsx|js|mjs|py|rs|go|c|h|cpp|hpp|cs|swift|xml|gradle|json|toml|ya?ml|sh|lua)$/i
 const identCache = new Map<string, { time: number; counts: Map<string, number> }>()
@@ -609,7 +610,7 @@ export function projectRoot(fp: string): string | undefined {
     if (up === d) break
     d = up
   }
-  // bez repo: sam katalog pliku (np. ~/oc-audyt, ~/bin), ale nie katalog domowy i nie /tmp
+  // no repo: just the file's directory (e.g. ~/oc-audyt, ~/bin), but not the home directory and not /tmp
   const dir = resolve(fp.replace(/^~(?=\/)/, HOME), existsSync(fp) && !/\.[A-Za-z0-9]+$/.test(fp) ? "." : "..")
   return dir.startsWith(HOME + "/") ? dir : undefined
 }
@@ -641,7 +642,7 @@ export function projectIdents(root: string): Map<string, number> {
   identCache.set(root, { time: Date.now(), counts })
   return counts
 }
-// odległość edycyjna ≤ 1 (zamiana, wstawienie, usunięcie albo przestawienie sąsiednich znaków)
+// edit distance ≤ 1 (substitution, insertion, deletion or swap of adjacent characters)
 export function within1(a: string, b: string): boolean {
   if (a === b) return false
   const la = a.length, lb = b.length
@@ -658,13 +659,13 @@ export function nearMisses(text: string, counts: Map<string, number>, max = 3): 
   const out: { bad: string; good: string; n: number }[] = []
   const seenIds = new Set<string>()
   for (const id of text.match(IDENT_RE) ?? []) {
-    // STAŁE_WIELKIMI (PASSED/PAUSED) to zwykle słowa, nie przekręcone nazwy
+    // UPPER_CASE_CONSTANTS (PASSED/PAUSED) are usually words, not garbled names
     if (id.length < 6 || seenIds.has(id) || counts.has(id) || !/[a-z]/.test(id)) continue
     seenIds.add(id)
     let best: { good: string; n: number } | undefined
     for (const [k, n] of counts) {
       if (n < 2 || k.length < 6 || !within1(id, k)) continue
-      // liczba mnoga / dopisany znak na końcu to zwykle nowa nazwa, nie literówka
+      // a plural / a character added at the end is usually a new name, not a typo
       if (k + "s" === id || id + "s" === k) continue
       if (!best || n > best.n) best = { good: k, n }
     }
@@ -684,9 +685,9 @@ export function similarNameHint(tool: string, input: any): { name: string; text:
     const old = tool === "edit" ? String(input.oldString ?? input.old_string ?? "") : ""
     const miss = nearMisses(text, projectIdents(root)).filter(m => !old.includes(m.bad))
     if (!miss.length) return undefined
-    return { name: "similar-name", text: "w nowej treści są nazwy, których NIE MA w projekcie, a jest bardzo podobna: " +
-      miss.map(m => `${m.bad} → czy chodziło o ${m.good} (${m.n}× w projekcie)?`).join("; ") +
-      ". Nie przepisuj nazwy z pamięci: skopiuj ją z wyniku grep -rn i popraw plik." }
+    return { name: "similar-name", text: "the new content has names that do NOT exist in the project, while a very similar one does: " +
+      miss.map(m => `${m.bad} → did you mean ${m.good} (${m.n}× in the project)?`).join("; ") +
+      ". Do not retype the name from memory: copy it from grep -rn output and fix the file." }
   }
   if (/^(shell|bash|fish)$/.test(tool) && typeof input.command === "string") {
     const cmd: string = input.command
@@ -700,7 +701,7 @@ export function similarNameHint(tool: string, input: any): { name: string; text:
     if (counts.has(m[2])) return undefined
     const miss = nearMisses(m[2], counts, 1)
     if (!miss.length) return undefined
-    return { name: "similar-name", text: `sed ma zamienić ${m[2]}, a tej nazwy NIE MA w plikach projektu. Jest ${miss[0].good} (${miss[0].n}×) — prawdopodobnie poprawna, a różnicę widzisz tylko Ty. Sprawdź: grep -rn "${miss[0].good}" . | head. Nie zamieniaj niczego, zanim grep nie pokaże, że błędna nazwa naprawdę istnieje.` }
+    return { name: "similar-name", text: `sed is to replace ${m[2]}, but that name does NOT exist in the project files. There is ${miss[0].good} (${miss[0].n}×) — probably correct, and only you see a difference. Check: grep -rn "${miss[0].good}" . | head. Do not replace anything until grep shows the wrong name really exists.` }
   }
   return undefined
 }
@@ -708,21 +709,21 @@ export function similarNameHint(tool: string, input: any): { name: string; text:
 function findHint(tool: string, input: any, repairMode = false): { name: string; text: string; always?: boolean } | undefined {
   try {
     if (!input || typeof input !== "object") return undefined
-    // read/edit z filePath — sprawdz istnienie + najblizsza sciezka (TYLKO absolutne)
-    // edit z pustym oldString: opencode sam odpowie „Use write to create…” — nie zasłaniamy tego
+    // read/edit with filePath — check existence + nearest path (absolute ONLY)
+    // edit with an empty oldString: opencode itself answers "Use write to create…" — we don't hide that
     const emptyEdit = tool === "edit" && (input.oldString === "" || input.old_string === "")
     let fp = (tool === "read" || (tool === "edit" && !emptyEdit)) ? (input.filePath ?? input.path) : null
-    // „home/USER/…” bez wiodącego „/” — model zgubił ukośnik; traktuj jak ścieżkę absolutną
+    // "home/USER/…" without the leading "/" — the model lost the slash; treat it as an absolute path
     if (typeof fp === "string" && HOME_NOSLASH_RE.test(fp) && !pathExists(fp)) fp = "/" + fp
-    // wielkość liter w nazwie katalogu domowego (/home/USER z inną wielkością liter) — popraw od razu, żeby nearestPath mogła poprawić jeszcze jeden segment
+    // letter case in the home directory name (/home/USER with different case) — fix it right away so nearestPath can fix one more segment
     if (typeof fp === "string" && HOME_ABS_RE.test(fp) && !fp.startsWith(HOME + "/")) fp = HOME + "/" + fp.slice(HOME.length + 1)
     if (typeof fp === "string" && (HOME_ABS_RE.test(fp) || fp.startsWith("~/"))) {
       if (!pathExists(fp) || fp !== (input.filePath ?? input.path)) {
         const suggested = pathExists(fp) ? fp : nearestPath(fp)
         if (suggested) {
-          return { name: "guessed-path", text: `Czy chodziło o ${suggested}?` }
+          return { name: "guessed-path", text: `Did you mean ${suggested}?` }
         }
-        return { name: "guessed-path", text: 'Model zgaduje ścieżki (Projekt/Projekti/Pobrane/Pulpit) zamiast sprawdzić ls. Sprawdź najpierw: ls ~/Projekt* lub ls ~/Pobran* i użyj poprawnej ścieżki.' }
+        return { name: "guessed-path", text: 'You are guessing paths (Projekt/Projekti/Pobrane/Pulpit) instead of checking with ls. Check first: ls ~/Projekt* or ls ~/Pobran* and use the correct path.' }
       }
     }
     const sim = similarNameHint(tool, input)
@@ -739,20 +740,20 @@ function findHint(tool: string, input: any, repairMode = false): { name: string;
       for (const w of HINTS_EXECUTE) if (w.re.test(goly)) return { name: w.name, text: w.text, always: w.always }
     } else if (/^(shell|bash|fish)$/.test(tool) && typeof input.command === "string") {
       const goly = stripLiterals(input.command)
-      // nazwa zabijanego procesu bywa w cudzysłowie (pkill -f 'opencode serve'), więc tę regułę sprawdzamy na pełnym poleceniu
+      // the name of the killed process is sometimes quoted (pkill -f 'opencode serve'), so this rule is checked on the full command
       for (const w of HINTS_SHELL) {
         const m = w.re.exec(w.name === "killing-services" || w.name.startsWith("guessed-path") ? input.command : goly)
         if (!m) continue
-        // ls/cat/etc na istniejącą ścieżkę to nie zgadywanie (fałszywy alarm z 10-17)
+        // ls/cat/etc on an existing path is not guessing (false alarm from 10-17)
         if (w.name === "guessed-path") {
-          // ścieżka = ostatnia grupa zaczynająca się od / albo ~ (m[2] bywa flagą, np. " -n" w cat -n)
+          // path = the last group starting with / or ~ (m[2] is sometimes a flag, e.g. " -n" in cat -n)
           const sc = [m[3], m[2]].find(g => typeof g === "string" && /^["']?[\/~]/.test(g))
           if (!sc || pathExists(sc)) continue
-          // blokuj tylko gdy brakuje SUSPECT segmentu; istniejący katalog = sprawdzenie, nie zgadywanie
+          // block only when a SUSPECT segment is missing; an existing directory = checking, not guessing
           const sm = SUSPECT_HOME.exec(sc)
           if (!sm || pathExists(sm[0])) continue
           const suggested = nearestPath(sc)
-          return { name: w.name, text: suggested ? `Czy chodziło o ${suggested}?` : w.text }
+          return { name: w.name, text: suggested ? `Did you mean ${suggested}?` : w.text }
         }
         return { name: w.name, text: w.text }
       }
@@ -761,14 +762,14 @@ function findHint(tool: string, input: any, repairMode = false): { name: string;
   return undefined
 }
 
-// ── ZNANE ROZWIĄZANIA PRZY BŁĘDZIE (auto-recall z kopalni) ───────────────────────────────────────
-// Gdy narzędzie zwróci błąd, szukamy w ~/oc-audyt/kopalnia/*.md wniosku, którego OBJAW pasuje do komunikatu,
-// i doklejamy jego NAPRAWĘ i PRZYKŁAD do wyniku błędu. Model dostaje rozwiązanie bez wołania lesson-note.
-// Dopasowanie leksykalne (bez embeddingów, szybkie, deterministyczne). Ten sam wniosek najwyżej raz na sesję.
+// ── KNOWN FIXES ON ERROR (auto-recall from the lesson mine) ───────────────────────────────────────
+// When a tool returns an error, we look in ~/oc-audyt/kopalnia/*.md for a lesson whose SYMPTOM matches the message,
+// and append its FIX and EXAMPLE to the error result. The model gets the solution without calling lesson-note.
+// Lexical matching (no embeddings, fast, deterministic). The same lesson at most once per session.
 type Lesson = { file: string; symptom: string; cause: string; fix: string; example: string; words: string[] }
 const LESSONS_DIR = join(HOME, "oc-audyt", "kopalnia")
 const COMMON_WORDS = new Set("nie jest jak przy albo oraz dla tego ten that the and model modelu narzedzie narzedzia blad bledu error przez jako tylko gdy kiedy sie nad pod bez ale czy jego jej ich to na do od po za ze co with from for into this tool tools call".split(" "))
-// słowa obecne w prawie każdym komunikacie błędu — same nie świadczą o tym, że to ten sam problem
+// words present in almost every error message — on their own they don't show it is the same problem
 const GENERIC_WORDS = new Set("invalid arguments argument missing unexpected token error errors failed fail provided update again line file files directory exited code status call calltool browserbackend found such found cannot read properties undefined null type string expected object https http traceback recent last most module message result execute".split(" "))
 let lessonsCache: { time: number; list: Lesson[] } = { time: 0, list: [] }
 
@@ -787,17 +788,18 @@ function lessons(): Lesson[] {
     for (const f of readdirSync(LESSONS_DIR)) {
       if (!f.endsWith(".md")) continue
       const t = readFileSync(join(LESSONS_DIR, f), "utf8")
-      const field = (n: string) => (t.match(new RegExp("^" + n + ": (.*)$", "m")) ?? [])[1] ?? ""
-      const symptomText = field("OBJAW")
+      // English field names; the Polish ones are still read from older lesson files
+      const field = (n: string) => (t.match(new RegExp("^(?:" + n + "): (.*)$", "m")) ?? [])[1] ?? ""
+      const symptomText = field("SYMPTOM|OBJAW")
       if (!symptomText) continue
-      lessonList.push({ file: f, symptom: symptomText, cause: field("PRZYCZYNA"), fix: field("NAPRAWA"), example: field("PRZYKŁAD"), words: wordsOf(symptomText) })
+      lessonList.push({ file: f, symptom: symptomText, cause: field("CAUSE|PRZYCZYNA"), fix: field("FIX|NAPRAWA"), example: field("EXAMPLE|PRZYKŁAD"), words: wordsOf(symptomText) })
     }
   } catch {}
   lessonsCache = { time: nowMs, list: lessonList }
   return lessonList
 }
 
-// najlepszy wniosek dla komunikatu błędu: ≥3 wspólne słowa i (≥25% OBJAWU albo ≥50% komunikatu); 2 słowa tylko przy krótkim, zgodnym komunikacie
+// best lesson for an error message: ≥3 shared words and (≥25% of the SYMPTOM or ≥50% of the message); 2 words only for a short, matching message
 function findLesson(errMessage: string, lessonList: Lesson[] = lessons()): Lesson | undefined {
   const m = new Set(wordsOf(errMessage))
   let best: Lesson | undefined, bestScore = 0
@@ -806,21 +808,21 @@ function findLesson(errMessage: string, lessonList: Lesson[] = lessons()): Lesso
     const hits = w.words.filter((x) => m.has(x)).length
     const distinctive = w.words.filter((x) => m.has(x) && !GENERIC_WORDS.has(x)).length
     if (distinctive < 2) continue
-    const share = hits / w.words.length // ile OBJAWU pokrywa komunikat
-    const coverage = m.size ? hits / m.size : 0 // ile komunikatu pokrywa OBJAW
+    const share = hits / w.words.length // how much of the SYMPTOM the message covers
+    const coverage = m.size ? hits / m.size : 0 // how much of the message the SYMPTOM covers
     const ok = hits >= 3 ? share >= 0.3 || coverage >= 0.5 : hits === 2 && coverage >= 0.4 && share >= 0.3
     if (ok && hits + share > bestScore) { best = w; bestScore = hits + share }
   }
   return best
 }
 
-// co model ma zobaczyć: przyczynę i gotowe poprawne wywołanie (NAPRAWA opisuje zwykle wnętrze wtyczki — tylko gdy brak przykładu)
+// what the model should see: the cause and a ready correct call (FIX usually describes plugin internals — only when there is no example)
 function lessonText(wn: Lesson): string {
-  const co = wn.example ? `zrób tak: ${wn.example}` : wn.fix
-  return `\n\nZNANE ROZWIĄZANIE: ${wn.cause ? wn.cause + " — " : ""}${co}`
+  const co = wn.example ? `do this: ${wn.example}` : wn.fix
+  return `\n\nKNOWN FIX: ${wn.cause ? wn.cause + " — " : ""}${co}`
 }
 
-// dokleja tekst do wyniku błędu — próbuje wszystkich miejsc, w których opencode trzyma komunikat; zwraca, co zmieniono
+// appends text to an error result — tries every place where opencode keeps the message; returns what was changed
 function appendToError(ev: any, hintText: string): string[] {
   const targets: string[] = []
   try {
@@ -848,7 +850,7 @@ const keyOf = (tool: string, input: unknown) => {
 // ── angielskie nazwy eksportowane (test i backward compat) ──────────────────────────────────────
 export { fixCode, fixNames, fixMcp }
 
-// mapa: polskie nazwy wniosków → angielskie (dla testów i deweloperów)
+// map: lesson field names (Polish legacy → English) for tests and developers
 
 export function hint(tool: string, input: any, repair = false) {
   const w = findHint(tool, input, repair)
@@ -867,7 +869,7 @@ export const enablesRepairMode = enablesRepair
 export default {
   id: "tool-input-fix",
   async setup(ctx: any) {
-    // sessionID → (klucz wywołania → {licznik błędów, ostatni błąd})
+    // sessionID → (call key → {error count, last error})
     const fails = new Map<string, Map<string, { n: number; msg: string }>>()
     const bucket = (sid: string) => {
       let b = fails.get(sid)
@@ -879,12 +881,12 @@ export default {
       return b
     }
 
-    // sessionID → ostatnie UDANE wywołanie i ile razy z rzędu się powtórzyło (pętla bez błędów)
+    // sessionID → the last SUCCESSFUL call and how many times in a row it repeated (a loop without errors)
     const lastOk = new Map<string, { key: string; n: number }>()
-    // sessionID → liczba powtórzeń tego samego błędu edit (dla "No changes to apply")
+    // sessionID → number of repeats of the same edit error (for "No changes to apply")
     const editErrors = new Map<string, number>()
-    // sessionID → ile razy w sesji zadziałał STOP; mały model potrafi go ignorować dziesiątki razy (noc 10-20: 48× ten sam cp),
-    // więc od STOP_ESCALATE komunikat się zmienia i każe skończyć turę bez narzędzi
+    // sessionID → how many times STOP fired in the session; a small model can ignore it dozens of times (night 10-20: 48× the same cp),
+    // so from STOP_ESCALATE on the message changes and tells it to end the turn without tools
     const stopCounts = new Map<string, number>()
     const escalate = (sid: string, base: string, err: string) => {
       const n = (stopCounts.get(sid) ?? 0) + 1
@@ -894,16 +896,16 @@ export default {
       return {
         n,
         text:
-          `KONIEC PRÓB (STOP nr ${n} w tej sesji — poprzednie zignorowałeś). Narzędzia tego nie naprawią. ` +
-          `NIE WYWOŁUJ już żadnego narzędzia. Napisz teraz odpowiedź użytkownikowi: co próbowałeś, ` +
-          (err ? `jaki błąd dostałeś (dosłownie: ${err.slice(0, 160)}), ` : "") +
-          `i czego potrzebujesz, żeby ruszyć dalej.`,
+          `NO MORE ATTEMPTS (STOP no. ${n} in this session — you ignored the previous ones). Tools will not fix this. ` +
+          `Do NOT call any more tools. Write your reply to the user now: what you tried, ` +
+          (err ? `what error you got (verbatim: ${err.slice(0, 160)}), ` : "") +
+          `and what you need to move on.`,
       }
     }
 
-    // Hook before umie zablokować tylko execute (podmiana code) i shell (podmiana command). Dla read/edit/write itd.
-    // wywołanie i tak się wykona, więc tekst (wskazówka, STOP) czeka tu i hook after dokleja go do wyniku
-    // (10-20: 88 wskazówek „Czy chodziło o…” dla read nigdy nie dotarło do modelu).
+    // The before hook can block only execute (replacing code) and shell (replacing command). For read/edit/write etc.
+    // the call runs anyway, so the text (hint, STOP) waits here and the after hook appends it to the result
+    // (10-20: 88 "Did you mean…" hints for read never reached the model).
     const pending = new Map<string, string>()
     const pendingKey = (sid: string, tool: string, input: unknown) => sid + "\u0001" + keyOf(tool, input)
     const deliver = (ev: any, tool: string, input: any, text: string, kind: "hint" | "stop") => {
@@ -917,12 +919,12 @@ export default {
       }
     }
 
-    // sessionID → (plik → "full" | "partial"): co model widział w tej sesji (read, write, udany edit, cat/sed w shellu)
+    // sessionID → (file → "full" | "partial"): what the model has seen in this session (read, write, successful edit, cat/sed in shell)
     const seen = new Map<string, Map<string, "full" | "partial">>()
     // sessionID → (plik → liczba „Could not find oldString” od ostatniego udanego read/write/edit tego pliku)
     const oldStringFails = new Map<string, Map<string, number>>()
-    // sesja utworzona po załadowaniu wtyczki = znamy całą jej historię, więc pierwsze zdarzenie też się liczy
-    // (10-20: edit jako pierwsze wywołanie sesji nie dostawał hinta). ID opencode "ses_" + 12 hex = ~(ms*4096+licznik) mod 2^48
+    // a session created after the plugin loaded = we know its whole history, so the first event counts too
+    // (10-20: edit as the first call of a session got no hint). opencode ID "ses_" + 12 hex = ~(ms*4096+counter) mod 2^48
     const loadedAt = BigInt(Date.now() - 5000) * 4096n
     const sessionAfterStart = (sid: string) => {
       const h = /^ses_([0-9a-f]{12})/.exec(sid)
@@ -940,11 +942,11 @@ export default {
       return m
     }
 
-    // ile razy dana wskazówka pojawiła się w sesji
+    // how many times a given hint appeared in the session
     const shown = new Map<string, number>()
-    // sesje w trybie naprawczym (pamięć użytkownika tylko do odczytu)
+    // sessions in repair mode (user memory read-only)
     const repairMode = new Set<string>()
-    // wnioski już doklejone w danej sesji
+    // lessons already appended in a given session
     const reminded = new Set<string>()
 
     await ctx.tool.hook("execute.before", (ev: any) => {
@@ -952,7 +954,7 @@ export default {
         const tool = String(ev.tool ?? "")
         let input = ev.input
         let fixes: string[] = []
-        // tools.filesystem.read_file("/ścieżka") → {path}
+        // tools.filesystem.read_file("/path") → {path}
         if (typeof input === "string" && tool.startsWith("filesystem_")) {
           input = { path: input }
           fixes.push("string→{path}")
@@ -978,15 +980,15 @@ export default {
           log(`FIX ${tool} [${fixes.join(",")}] session=${ev.sessionID}`)
         }
 
-        // blokada: browser_navigate z protokołem niestandardowym lub browser_type bez targetu
+        // block: browser_navigate with a non-standard protocol or browser_type without a target
         if (input && typeof input === "object" && input._block === true) {
           let stopMsg: string
           if (/_navigate$/.test(tool)) {
-            stopMsg = `browser_navigate nie obsługuje protokołu ${JSON.stringify(input.url?.slice(0, 40))}. Playwright akceptuje tylko http/https. Użyj shell: xdg-open "${input.url}" lub narzędzie read do plików lokalnych.`
+            stopMsg = `browser_navigate does not support the protocol ${JSON.stringify(input.url?.slice(0, 40))}. Playwright accepts only http/https. Use shell: xdg-open "${input.url}" or the read tool for local files.`
           } else if (/_type$/.test(tool)) {
-            stopMsg = "browser_type wymaga targetu (element do wpisania). Najpierw zrób browser_snapshot(), weź ref z [ref=xxx] i podaj: target: \"xxx\". Albo użyj browser_fill_form do wypełniania formularzy."
+            stopMsg = "browser_type needs a target (the element to type into). First do browser_snapshot(), take the ref from [ref=xxx] and pass: target: \"xxx\". Or use browser_fill_form to fill forms."
           } else {
-            stopMsg = "Wywołanie zablokowane — niezgodne ze schematem."
+            stopMsg = "Call blocked — does not match the schema."
           }
           if (tool === "execute") ev.input = { ...input, code: `throw new Error(${JSON.stringify(stopMsg)})` }
           log(`BLOCK ${tool} session=${ev.sessionID}`)
@@ -999,7 +1001,7 @@ export default {
           repairMode.add(sidN)
           log(`REPAIR-MODE on (${tool}) session=${sidN}`)
         }
-        // wskazówka zamiast wykonania (najwyżej 2× ta sama na sesję; blokady trybu naprawczego bez limitu)
+        // hint instead of running (at most 2× the same per session; repair-mode blocks without a limit)
         const w = findHint(tool, input, repairMode.has(sidN))
         if (w) {
           const callKey = String(ev.sessionID) + "\u0000" + w.name
@@ -1007,9 +1009,9 @@ export default {
           if (shown.size > 2000) shown.clear()
           shown.set(callKey, shownCount)
           if (shownCount <= 2 || w.always) {
-            // read/edit itd. wykonują się mimo wskazówki (deliver dokleja ją do wyniku), więc tylko tam bez „nie wykonane”
+            // read/edit etc. run despite the hint (deliver appends it to the result), so only there without "not run"
             const blockable = tool === "execute" || (/^(shell|bash|fish)$/.test(tool) && typeof input.command === "string")
-            const hintText = (blockable ? "WSKAZÓWKA (wywołanie nie zostało wykonane): " : "WSKAZÓWKA: ") + w.text
+            const hintText = (blockable ? "HINT (the call was not run): " : "HINT: ") + w.text
             logHint(String(ev.sessionID), tool, w.name, input, w.text)
             deliver(ev, tool, input, hintText, "hint")
             log(`HINT ${tool} [${w.name}] session=${ev.sessionID}`)
@@ -1021,8 +1023,8 @@ export default {
         if (prev && prev.n >= MAX_REPEAT) {
           const e = escalate(
             String(ev.sessionID),
-            `STOP: identyczne wywołanie ${tool} padło już ${prev.n}× z błędem: ${prev.msg.slice(0, 200)}. ` +
-              `Ponowienie da ten sam wynik. Zmień kod/argumenty albo podejście (np. webfetch), a jeśli nie wiesz jak — powiedz użytkownikowi.`,
+            `STOP: the identical ${tool} call has already failed ${prev.n}× with the error: ${prev.msg.slice(0, 200)}. ` +
+              `Retrying gives the same result. Change the code/arguments or the approach (e.g. webfetch), and if you don't know how — tell the user.`,
             prev.msg,
           )
           deliver(ev, tool, input, e.text, "stop")
@@ -1033,8 +1035,8 @@ export default {
         if (lastText && lastText.key === keyOf(tool, input) && lastText.n >= MAX_REPEAT) {
           const e = escalate(
             String(ev.sessionID),
-            `STOP: to samo wywołanie ${tool} wykonałeś już ${lastText.n}× z rzędu i wynik jest wyżej w rozmowie. ` +
-              `Ponowienie nic nie zmieni. Wykorzystaj ten wynik i zrób następny krok albo napisz użytkownikowi, czego brakuje.`,
+            `STOP: you have already run the same ${tool} call ${lastText.n}× in a row and the result is above in the conversation. ` +
+              `Retrying changes nothing. Use that result and take the next step, or tell the user what is missing.`,
             "",
           )
           deliver(ev, tool, input, e.text, "stop")
@@ -1048,10 +1050,10 @@ export default {
     await ctx.tool.hook("execute.after", (ev: any) => {
       try {
         const tool = String(ev.tool ?? "")
-        // wynik naszego własnego STOP-u nie zmienia liczników — inaczej resetowałby pętlę, którą właśnie hamujemy
+        // the result of our own STOP does not change the counters — otherwise it would reset the loop we are braking
         const blocked = String(ev.input?.command ?? ev.input?.code ?? "")
-        if (/^(echo|throw new Error\()\s*"(STOP:|KONIEC PRÓB)/.test(blocked)) return
-        // tekst z hooka before dla narzędzia, którego nie dało się zablokować — doklejamy do wyniku (błędu albo sukcesu)
+        if (/^(echo|throw new Error\()\s*"(STOP:|NO MORE ATTEMPTS)/.test(blocked)) return
+        // text from the before hook for a tool that could not be blocked — append it to the result (error or success)
         const pk = pendingKey(String(ev.sessionID), tool, ev.input ?? {})
         const queued = pending.get(pk)
         if (queued !== undefined) {
@@ -1060,8 +1062,8 @@ export default {
           log(`DELIVERED ${tool} → ${targets.join(",") || "NO TARGET"} session=${ev.sessionID}`)
         }
         const res = ev.result as any
-        // zapis „co model widział” — przed early return dla udanych wywołań; pierwsze zdarzenie sesji
-        // tylko zakłada mapę (po przeładowaniu wtyczki w trakcie sesji nie wiemy, co było wcześniej)
+        // record "what the model has seen" — before the early return for successful calls; the first event of a session
+        // only creates the map (after a plugin reload mid-session we don't know what happened earlier)
         const inSession = seen.has(String(ev.sessionID)) || sessionAfterStart(String(ev.sessionID))
         const m = seenFor(String(ev.sessionID))
         const okRes = ev.status !== "error" && res?.metadata?.error !== true
@@ -1074,7 +1076,7 @@ export default {
             else if (!m.has(fp)) m.set(fp, "partial")
           }
         } else if (typeof ev.input?.command === "string" && /\b(cat|sed|head|tail|less|bat|nl|awk|grep|rg)\b/.test(ev.input.command)) {
-          // cat/sed w shellu też pokazuje treść — zapamiętujemy nazwy plików z komendy (cwd nieznany → basename)
+          // cat/sed in shell also shows the content — remember the file names from the command (cwd unknown → basename)
           for (const t of ev.input.command.match(/[\w.~\/-]*[\w-]\.[\w]+/g) ?? []) m.set("shell:" + basename(t), "full")
         }
         const failed =
@@ -1100,13 +1102,13 @@ export default {
             "",
         )
         const input = ev.input ?? {}
-        // grep/rg/diff/test z exit 1 i bez wyjścia = „nic nie znaleziono”, nie błąd — nie liczymy do pętli
+        // grep/rg/diff/test with exit 1 and no output = "nothing found", not an error — not counted for loops
         const cmd = typeof input.command === "string" ? input.command.trim() : ""
         if (res?.metadata?.exit === 1 && !msg.trim() && /^(grep|rg|diff|test|\[)\s/.test(cmd)) return
-        // pusty wynik + exit≠0,1,124 + łańcuch && = ciche niepowodzenie; dokładaj wskazówkę
-        // wyjątki: exit 124 (timeout, nie jest cichym niepowodzeniem) oraz exit 3 + systemctl
+        // empty output + exit≠0,1,124 + && chain = a silent failure; add a hint
+        // exceptions: exit 124 (timeout, not a silent failure) and exit 3 + systemctl
         if (isSilentChainFailure(cmd, res?.metadata?.exit, msg)) {
-          appendToError(ev, "\nWSKAZÓWKA: wynik pusty, kod błędu " + res.metadata.exit + " — łańcuch && padł cicho (np. pliku nie ma albo 2>/dev/null zagrał). Sprawdź każdy etap osobno bez 2>/dev/null.")
+          appendToError(ev, "\nHINT: empty output, exit code " + res.metadata.exit + " — the && chain failed silently (e.g. a missing file, or 2>/dev/null hid it). Check each step separately without 2>/dev/null.")
           log(`HINT-no-output-chain shell exit=${res.metadata.exit} session=${ev.sessionID}`)
         }
         const prev = b.get(key)
@@ -1144,9 +1146,9 @@ export default {
             log(`HINT-oldString ${tool} session=${ev.sessionID}`)
           }
         }
-        // Grupa B: "No changes to apply" (oldString == newString) ma za każdym razem inne oldString, więc LOOP-STOP
-        // (porównuje pełne wejście) go nie łapie — liczymy wg komunikatu. Hook before nie umie zablokować edit
-        // (podmienia tylko code/command), a taki edit i tak nic nie zmienia, więc STOP doklejamy do błędu tutaj.
+        // Group B: "No changes to apply" (oldString == newString) has a different oldString each time, so LOOP-STOP
+        // (which compares the full input) does not catch it — we count by message. The before hook cannot block edit
+        // (it only replaces code/command), and such an edit changes nothing anyway, so the STOP is appended to the error here.
         if (tool === "edit" && msg.includes("No changes to apply")) {
           const sid = String(ev.sessionID)
           const n = (editErrors.get(sid) ?? 0) + 1
@@ -1155,17 +1157,17 @@ export default {
           if (n >= MAX_REPEAT) {
             const e = escalate(
               sid,
-              `STOP: "No changes to apply" już ${n}× w tej sesji — oldString i newString są identyczne, więc edit nic nie zmieni. ` +
-                `Zrób read pliku i w newString wpisz tekst PO zmianie. Jeśli plik już ma właściwą treść, zmiana jest zrobiona — nie edytuj dalej.`,
+              `STOP: "No changes to apply" already ${n}× in this session — oldString and newString are identical, so edit changes nothing. ` +
+                `read the file and put the text AFTER the change in newString. If the file already has the right content, the change is done — stop editing.`,
               msg,
             )
             appendToError(ev, "\n\n" + e.text)
             log(`LOOP-STOP-NOCHANGES edit n=${n} stop=${e.n} session=${sid}`)
           } else log(`NOCHANGES edit n=${n} session=${sid}`)
         }
-        // Odmowa z reguł uprawnień (Permission.BlockedError → "Permission denied: <akcja>", komenda NIE ruszyła).
-        // Model ponawia tę samą odmowę albo próbuje ją obejść (bash -c, skrypt, pkexec). Tylko ten dokładny
-        // komunikat — "Permission denied" z wyjścia samej komendy (chmod, plik roota) to inny przypadek.
+        // Denial from permission rules (Permission.BlockedError → "Permission denied: <action>", the command did NOT run).
+        // The model repeats the same denial or tries to get around it (bash -c, a script, pkexec). Only this exact
+        // message — "Permission denied" in the output of the command itself (chmod, a root file) is a different case.
         const denied = /^Permission denied: ([\w-]+)/.exec(msg)
         if (denied) {
           const sid = String(ev.sessionID)
@@ -1176,16 +1178,16 @@ export default {
           appendToError(
             ev,
             pdCount === 1
-              ? `\n\nWSKAZÓWKA: to odmowa z reguł uprawnień ustawionych przez użytkownika (${denied[1]}), nie błąd systemu — nic nie zostało uruchomione. ` +
-                  `Ta sama albo przerobiona komenda (inne cudzysłowy, bash -c, skrypt, pkexec) też jest zabroniona — nie ponawiaj i nie obchodź reguły. ` +
-                  `Jeśli bez tego nie skończysz zadania: napisz użytkownikowi, co chcesz zrobić i dlaczego, i podaj gotową komendę do wklejenia ` +
-                  `(np. \`sudo cp PLIK CEL\` albo \`sudo bash ~/tmp-opencode/SKRYPT.sh\` — skrypt najpierw zapisz narzędziem write). Potem zakończ turę.`
-              : `\n\nSTOP: odmowa uprawnień już ${pdCount}× w tej sesji. Nie próbuj dalej — napisz użytkownikowi, czego potrzebujesz, i zakończ turę.`,
+              ? `\n\nHINT: this is a denial from permission rules set by the user (${denied[1]}), not a system error — nothing was run. ` +
+                  `The same or a reworked command (other quotes, bash -c, a script, pkexec) is forbidden too — do not retry and do not get around the rule. ` +
+                  `If you cannot finish the task without it: tell the user what you want to do and why, and give a ready command to paste ` +
+                  `(e.g. \`sudo cp FILE TARGET\` or \`sudo bash ~/tmp-opencode/SCRIPT.sh\` — write the script with the write tool first). Then end the turn.`
+              : `\n\nSTOP: permission denied already ${pdCount}× in this session. Stop trying — tell the user what you need and end the turn.`,
           )
           log(`HINT-permission-denied ${tool} action=${denied[1]} n=${pdCount} session=${sid}`)
         }
-        // Brak pliku przy komendzie, która coś usuwa/przenosi/zmienia: NIE przypominamy wniosków „sprawdź ls i użyj ścieżki
-        // z wyniku” — 10-23 Gemma (zadanie 11) po takim wniosku usunęła INNY plik o tej samej nazwie (new/ zamiast old/).
+        // Missing file for a command that deletes/moves/changes something: we do NOT recall lessons "check ls and use the path
+        // from the output" — 10-23 Gemma (task 11) after such a lesson deleted ANOTHER file with the same name (new/ instead of old/).
         const missingTarget = isMissingTarget(cmd, msg)
         if (missingTarget) {
           const k = String(ev.sessionID) + "\u0000" + "missing-target"
@@ -1203,7 +1205,7 @@ export default {
             log(`HINT-shell-syntax session=${ev.sessionID}`)
           }
         }
-        // znane rozwiązanie z kopalni — doklejone do błędu, raz na sesję dla danego wniosku
+        // known fix from the lesson mine — appended to the error, once per session per lesson
         const wn = missingTarget ? null : findLesson(msg)
         if (wn) {
           const k = String(ev.sessionID) + "\u0000" + wn.file

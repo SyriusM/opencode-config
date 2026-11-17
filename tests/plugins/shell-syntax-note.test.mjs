@@ -12,10 +12,10 @@ const fail = (sid, tool, message) => {
   return ev.error.message
 }
 const pl = "/usr/bin/bash: -c: linia 1: nieoczekiwany EOF podczas poszukiwania pasującego `\"' |  Exited with code 2"
-check(/NIE została wykonana/.test(fail("s1", "shell", pl)), "pl unclosed quote: note expected")
-check(!/NIE została wykonana/.test(fail("s1", "shell", pl)), "second time in session: no repeat")
-check(/NIE została wykonana/.test(fail("s2", "bash", "bash: -c: line 1: unexpected EOF while looking for matching `''")), "en message: note expected")
-check(/NIE została wykonana/.test(fail("s3", "shell", "linia 16: błąd składni: niespodziewany koniec pliku z polecenia `for'")), "for without done: note expected")
-check(!/NIE została wykonana/.test(fail("s4", "shell", "ls: nie ma dostępu do 'x': Nie ma takiego pliku")), "other error: no note")
+check(/was NOT run/.test(fail("s1", "shell", pl)), "pl unclosed quote: note expected")
+check(!/was NOT run/.test(fail("s1", "shell", pl)), "second time in session: no repeat")
+check(/was NOT run/.test(fail("s2", "bash", "bash: -c: line 1: unexpected EOF while looking for matching `''")), "en message: note expected")
+check(/was NOT run/.test(fail("s3", "shell", "linia 16: błąd składni: niespodziewany koniec pliku z polecenia `for'")), "for without done: note expected")
+check(!/was NOT run/.test(fail("s4", "shell", "ls: nie ma dostępu do 'x': Nie ma takiego pliku")), "other error: no note")
 check(!mod.isShellSyntaxError("edit", pl), "only shell tools")
 console.log(fails ? `${fails} FAIL` : "shell-syntax-note: 6 checks OK")

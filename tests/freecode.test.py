@@ -175,7 +175,7 @@ ok(len(problems({"share": "auto", "enterprise": {"url": "https://corp.example.co
    "all four leaks reported together")
 
 # model id must exist in provider.<pid>.models (krok 1)
-ok(flagged("nie istnieje w `provider.local.models`", extra={"model": "local/m2", "small_model": "local/m1"}),
+ok(flagged("does not exist in `provider.local.models`", extra={"model": "local/m2", "small_model": "local/m1"}),
         "model missing from provider.models flagged")
 ok(problems(extra={"model": "local/m2", "small_model": "local/m2"},
             provider={"models": {"m1": {}, "m2": {}}}) == [], "model present in provider.models passes")
@@ -184,9 +184,9 @@ ok(problems(extra={"model": "local/Qwen/Qwen3.6-35B-A3B", "small_model": "local/
         "model id with nested path passes (split on first /)")
 
 # npm plugins flagged; local paths and FREECODE_PLUGINS allowed (krok 2)
-ok(flagged("jest z npm (pobierana z sieci)", extra={"plugin": ["@knikolov/opencode-plugin-simple-memory"]}),
+ok(flagged("is from npm (downloaded from the network)", extra={"plugin": ["@knikolov/opencode-plugin-simple-memory"]}),
         "npm plugin flagged")
-ok(flagged("jest z npm (pobierana z sieci)", extra={"plugin": ["@scope/name@1.2"]}),
+ok(flagged("is from npm (downloaded from the network)", extra={"plugin": ["@scope/name@1.2"]}),
         "npm plugin with version flagged")
 ok(problems(extra={"plugin": ["/abs/path.js", "./rel.js", "../up.js", "~/home.js", "file:///x.js"]}) == [],
         "local plugin paths pass")
@@ -292,7 +292,7 @@ ok(not os.path.exists(fc.RELOAD_STAMP), "failed reload leaves no stamp")
 os.remove(f"{tmp}/reload-fails")
 active["data"] = {"ses_1": {}}
 why = fc.service_mode(oc, work)
-ok(isinstance(why, str) and "liczy" in why and oc_calls() == [], "busy service is left alone")
+ok(isinstance(why, str) and "busy" in why and oc_calls() == [], "busy service is left alone")
 active["data"] = {}
 service(svc_env)
 age(cfg, 1000)

@@ -1,22 +1,23 @@
 #!/home/user/mempalace/.venv/bin/python
-"""Kopalnia błędów i rozwiązań opencode: plik w ~/oc-audyt/kopalnia/ + wpis w OSOBNYM pałacu ~/.mempalace-opencode
-(wing opencode, room bledy) — wnioski modeli nie mieszają się z osobistą pamięcią użytkownika w ~/.mempalace.
+"""Lesson store for opencode errors and fixes: a file in ~/oc-audyt/kopalnia/ + an entry in a SEPARATE palace
+~/.mempalace-opencode (wing opencode, room bledy) — model lessons do not mix with the user's personal memory in ~/.mempalace.
 
-  lesson-note                                   ile wniosków i ostatnie 5
-  lesson-note search "komunikat albo słowa"     znane rozwiązania (dokładne słowa w plikach + podobne w mempalace)
-  lesson-note add "OBJAW" "PRZYCZYNA" "NAPRAWA" ["PRZYKŁAD poprawnego wywołania"]
-        OBJAW     = komunikat błędu albo co się działo (dosłownie, krótko)
-        PRZYCZYNA = dlaczego (jedno zdanie)
-        NAPRAWA   = co zmieniono i gdzie (plik, reguła) albo jak to obejść
-  lesson-note backfill                          dopisz do mempalace wnioski, które są tylko w plikach
-Zgodność wstecz: szukaj = search, dodaj = add, uzupelnij = backfill.
+  lesson-note                                   number of lessons and the last 5
+  lesson-note search "message or words"         known fixes (exact words in files + similar ones in mempalace)
+  lesson-note add "SYMPTOM" "CAUSE" "FIX" ["EXAMPLE of a correct call"]
+        SYMPTOM = the error message or what happened (verbatim, short)
+        CAUSE   = why (one sentence)
+        FIX     = what was changed and where (file, rule) or how to work around it
+  lesson-note backfill                          add to mempalace the lessons that exist only as files
+Backward compatible: szukaj = search, dodaj = add, uzupelnij = backfill.
+Older lesson files with Polish field names (OBJAW/PRZYCZYNA/NAPRAWA/PRZYKŁAD) are still read.
 
-Zabezpieczenia: najwyżej 15 nowych wniosków dziennie; w trakcie miningu pałacu zapis idzie tylko do pliku
-(potem `backfill`); plik jest źródłem prawdy — przerwany zapis do pałacu niczego nie gubi.
+Safeguards: at most 15 new lessons per day; while the palace is being mined, writes go to the file only
+(run `backfill` later); the file is the source of truth — an interrupted palace write loses nothing.
 """
 import datetime, os, re, sys, contextlib, io, sqlite3, subprocess
 
-# Osobny pałac — musi być ustawiony PRZED importem mempalace.
+# Separate palace — must be set BEFORE importing mempalace.
 os.environ["MEMPALACE_CONFIG_DIR"] = os.path.expanduser("~/.mempalace-opencode")
 os.environ.pop("MEMPALACE_PALACE_PATH", None)
 os.environ.pop("MEMPAL_PALACE_PATH", None)
@@ -26,7 +27,7 @@ WING, ROOM = "opencode", "bledy"
 
 
 def quiet(f, *a, **k):
-    """mempalace wypisuje ostrzeżenia telemetrii na stderr — nie zaśmiecaj nimi wyniku"""
+    """mempalace prints telemetry warnings to stderr — keep them out of the output"""
     with contextlib.redirect_stderr(io.StringIO()), contextlib.redirect_stdout(io.StringIO()):
         return f(*a, **k)
 
@@ -42,12 +43,12 @@ def shorten(t, n=110):
 
 
 DAILY_LIMIT = 15
-THRESHOLD = 0.55  # minimalne podobieństwo dla trafienia samym znaczeniem (zmierzone: trafne 0,56–0,74, luźne ~0,50–0,53, obce ~0,3)
+THRESHOLD = 0.55  # minimum similarity for a meaning-only hit (measured: relevant 0.56–0.74, loose ~0.50–0.53, unrelated ~0.3)
 PALACE_DB = os.path.expanduser("~/.mempalace-opencode/palace/chroma.sqlite3")
 
 
 def mining_running():
-    """Ciężki zapis do pałacu z innego procesu (mining) — wtedy nie dokładamy własnych zapisów."""
+    """Heavy palace writes from another process (mining) — do not add our own writes then."""
     try:
         r = subprocess.run(["pgrep", "-af", "mempalace mine|mine_case"], capture_output=True, text=True)
         return any("pgrep" not in l and "lesson-note" not in l for l in r.stdout.splitlines())
@@ -56,9 +57,9 @@ def mining_running():
 
 
 def in_palace():
-    """Nazwy plików kopalni, które mają już wpis w mempalace (odczyt bazy tylko do odczytu)."""
+    """Lesson file names that already have a mempalace entry (database opened read-only)."""
     if not os.path.exists(PALACE_DB):
-        return set()  # pałac jeszcze nie założony — żaden wniosek nie ma wpisu
+        return set()  # palace not created yet — no lesson has an entry
     try:
         db = sqlite3.connect(f"file:{PALACE_DB}?mode=ro", uri=True)
         return {os.path.basename(r[0]) for r in db.execute(
@@ -69,22 +70,22 @@ def in_palace():
 
 def to_palace(file_path, content):
     if mining_running():
-        return "trwa mining pałacu — wniosek tylko w pliku (później: lesson-note backfill)"
+        return "palace mining in progress — lesson saved to file only (later: lesson-note backfill)"
     try:
         from mempalace import mcp_server as m
         r = quiet(m.tool_add_drawer, wing=WING, room=ROOM, content=content, added_by="lesson-note", source_file=file_path)
-        return "zapisano w pałacu opencode" if isinstance(r, dict) and r.get("success") else f"mempalace: {str(r)[:120]}"
-    except Exception as e:  # plik i tak został — pałac można uzupełnić później
-        return f"mempalace niedostępny ({type(e).__name__}); wniosek jest w pliku (później: lesson-note backfill)"
+        return "saved to the opencode palace" if isinstance(r, dict) and r.get("success") else f"mempalace: {str(r)[:120]}"
+    except Exception as e:  # the file is kept anyway — the palace can be backfilled later
+        return f"mempalace unavailable ({type(e).__name__}); the lesson is in the file (later: lesson-note backfill)"
 
 
 def backfill():
     have = in_palace()
     if have is None:
-        sys.exit("Nie mogę odczytać bazy pałacu.")
+        sys.exit("Cannot read the palace database.")
     missing = [f for f in lesson_files() if f not in have]
     if not missing:
-        print(f"Wszystkie wnioski ({len(lesson_files())}) są w mempalace.")
+        print(f"All lessons ({len(lesson_files())}) are in mempalace.")
         return
     for f in missing:
         path = os.path.join(LESSONS_DIR, f)
@@ -94,24 +95,24 @@ def backfill():
 def add(symptom, cause, fix, example=""):
     symptom, cause, fix, example = (" ".join(x.split()) for x in (symptom, cause, fix, example))
     if min(len(symptom), len(cause), len(fix)) < 8:
-        sys.exit("Każde z pól OBJAW, PRZYCZYNA, NAPRAWA musi mieć treść (min. 8 znaków).")
+        sys.exit("Each of SYMPTOM, CAUSE, FIX must have content (min. 8 characters).")
     for f in lesson_files():
         if symptom.lower() in open(os.path.join(LESSONS_DIR, f), encoding="utf-8").read().lower():
-            print(f"Taki objaw już jest w kopalni: {f}")
+            print(f"This symptom is already in the lesson store: {f}")
             return
     today = datetime.date.today().isoformat()
     bulk = os.environ.get("OC_LESSON_BULK") or os.environ.get("OC_WNIOSEK_ZASILANIE")  # old name kept
     if bulk != "1" and sum(1 for f in lesson_files() if f.startswith(today)) >= DAILY_LIMIT:
-        sys.exit(f"Limit {DAILY_LIMIT} nowych wniosków dziennie wyczerpany. Dopisz jutro albo połącz podobne wnioski w jeden.")
-    name = re.sub(r"[^a-z0-9]+", "-", symptom.lower().translate(str.maketrans("ąćęłńóśźż", "acelnoszz")))[:50].strip("-") or "wniosek"
+        sys.exit(f"Daily limit of {DAILY_LIMIT} new lessons reached. Add it tomorrow or merge similar lessons into one.")
+    name = re.sub(r"[^a-z0-9]+", "-", symptom.lower().translate(str.maketrans("ąćęłńóśźż", "acelnoszz")))[:50].strip("-") or "lesson"
     file_path = os.path.join(LESSONS_DIR, f"{today}-{name}.md")
-    content = f"# Błąd opencode i rozwiązanie ({today})\n\nOBJAW: {symptom}\nPRZYCZYNA: {cause}\nNAPRAWA: {fix}\n"
+    content = f"# opencode error and fix ({today})\n\nSYMPTOM: {symptom}\nCAUSE: {cause}\nFIX: {fix}\n"
     if example:
-        content += f"PRZYKŁAD: {example}\n"
+        content += f"EXAMPLE: {example}\n"
     with open(file_path, "w", encoding="utf-8") as f:
         f.write(content)
     status = to_palace(file_path, content)
-    print(f"Dodano: {os.path.basename(file_path)} — {status}")
+    print(f"Added: {os.path.basename(file_path)} — {status}")
 
 
 STOPWORDS = set("""nie jest jak przy albo oraz dla tego ten that the and model modelu narzedzie narzedzia blad bledu error
@@ -123,13 +124,13 @@ def ascii_fold(t):
 
 
 def search(q):
-    """Wynik = wniosek, którego OBJAW zawiera większość istotnych słów zapytania ALBO jest znaczeniowo bliski (≥ PROG).
-    Znaczeniowo szukamy TYLKO w pokoju błędów opencode — reszty pałacu (audio, sprzęt, prywatne notatki) nie pokazujemy."""
+    """Hit = a lesson whose SYMPTOM contains most of the significant query words OR is close in meaning (≥ THRESHOLD).
+    The meaning search covers ONLY the opencode error room — the rest of the palace (audio, hardware, private notes) is never shown."""
     words = [w for w in re.findall(r"\w+", ascii_fold(q)) if len(w) >= 4 and w not in STOPWORDS]
-    hits = {}  # plik -> [udział słów w OBJAW, podobieństwo]
+    hits = {}  # file -> [share of words in SYMPTOM, similarity]
     for f in lesson_files():
         t = open(os.path.join(LESSONS_DIR, f), encoding="utf-8").read()
-        symptom = ascii_fold(next((l for l in t.splitlines() if l.startswith("OBJAW: ")), ""))
+        symptom = ascii_fold(next((l for l in t.splitlines() if l.startswith(("SYMPTOM: ", "OBJAW: "))), ""))
         if words:
             share = sum(1 for w in words if w in symptom) / len(words)
             if share >= 0.6 and sum(1 for w in words if w in symptom) >= 2:
@@ -147,24 +148,24 @@ def search(q):
     except Exception:
         pass
     if not hits:
-        print("Brak znanych rozwiązań dla tego błędu — to nowy przypadek. Po naprawie dopisz go: lesson-note add …")
+        print("No known fix for this error — it is a new case. After fixing it, add it: lesson-note add …")
         return
     ranked = sorted(hits.items(), key=lambda kv: -(kv[1][0] + kv[1][1]))[:4]
-    print(f"Znane rozwiązania ({len(ranked)}) — sprawdź, czy OBJAW pasuje do Twojego błędu, zanim zastosujesz:")
+    print(f"Known fixes ({len(ranked)}) — check that the SYMPTOM matches your error before applying:")
     for f, (share, sim) in ranked:
         t = open(os.path.join(LESSONS_DIR, f), encoding="utf-8").read()
-        print(f"\n--- {f} (słowa {share:.0%}, podobieństwo {sim:.2f})")
-        print("\n".join(l for l in t.splitlines() if l.startswith(("OBJAW", "PRZYCZYNA", "NAPRAWA", "PRZYKŁAD"))))
+        print(f"\n--- {f} (words {share:.0%}, similarity {sim:.2f})")
+        print("\n".join(l for l in t.splitlines() if l.startswith(("SYMPTOM", "CAUSE", "FIX", "EXAMPLE", "OBJAW", "PRZYCZYNA", "NAPRAWA", "PRZYKŁAD"))))
 
 
 def main():
     a = sys.argv[1:]
     if not a:
         p = lesson_files()
-        print(f"Wniosków w kopalni: {len(p)} (~/oc-audyt/kopalnia, pałac ~/.mempalace-opencode: {WING}/{ROOM})")
+        print(f"Lessons in store: {len(p)} (~/oc-audyt/kopalnia, palace ~/.mempalace-opencode: {WING}/{ROOM})")
         for f in p[-5:]:
             t = open(os.path.join(LESSONS_DIR, f), encoding="utf-8").read()
-            o = next((l[7:] for l in t.splitlines() if l.startswith("OBJAW: ")), "")
+            o = next((l.split(": ", 1)[1] for l in t.splitlines() if l.startswith(("SYMPTOM: ", "OBJAW: "))), "")
             print(f"- {f[:10]} {shorten(o)}")
     elif a[0] in ("search", "szukaj") and len(a) >= 2:
         search(" ".join(a[1:]))

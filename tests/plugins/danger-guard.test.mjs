@@ -85,8 +85,8 @@ for (const cmd of ALLOW) {
   }
   console.log(`script cases: ${S.length}`)
 }
-const msg = message({ name: "git_push", why: "wysyła" }, "git push")
-if (!msg.includes("Uruchom RĘCZNIE")) { fail++; console.log("FAIL message: no hand-off text") }
+const msg = message({ name: "git_push", why: "sends" }, "git push")
+if (!msg.includes("Run MANUALLY")) { fail++; console.log("FAIL message: no hand-off text") }
 console.log(`cases: ${BLOCK.length} block + ${ALLOW.length} allow, ${fail} failed`)
 
 // false-positive scan over real history: print every hit for manual review

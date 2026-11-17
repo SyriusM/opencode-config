@@ -2,20 +2,20 @@ import { mkdir, readFile, writeFile } from "node:fs/promises"
 import { homedir } from "node:os"
 import { dirname, join } from "node:path"
 
-// Stawka za kWh dla power-cost (bez UI, żeby dało się testować w node).
+// Per-kWh tariff for power-cost (no UI, so it can be tested in node).
 
 export type Tariff = { perKwh: number; currency: string; source: string }
 
-export const FALLBACK_TARIFF: Tariff = { perKwh: 1.26, currency: "zł", source: "domyślna" }
+export const FALLBACK_TARIFF: Tariff = { perKwh: 1.26, currency: "zł", source: "default" }
 const cacheFile = () => join(process.env.XDG_CACHE_HOME || join(homedir(), ".cache"), "power-cost.json")
 const CACHE_MAX_AGE_MS = 30 * 24 * 3_600_000
 const EUROSTAT_URL = "https://ec.europa.eu/eurostat/api/dissemination/statistics/1.0/data/nrg_pc_204"
 
-// Kraje spoza strefy euro: Eurostat podaje cenę w walucie kraju (NAC). Reszta w EUR.
+// Countries outside the euro area: Eurostat gives the price in the national currency (NAC). The rest in EUR.
 const NATIONAL_CURRENCY: Record<string, string> = {
   PL: "zł", CZ: "Kč", HU: "Ft", RO: "lei", SE: "kr", DK: "kr", NO: "kr", IS: "kr", CH: "CHF",
 }
-// Kody ISO, które Eurostat zapisuje inaczej.
+// ISO codes that Eurostat writes differently.
 const EUROSTAT_GEO: Record<string, string> = { GR: "EL", GB: "UK" }
 
 export function detectCountry(): string | null {
@@ -32,7 +32,7 @@ function manualTariff(country: string | null): Tariff | null {
   const currency =
     process.env.POWER_COST_CURRENCY ||
     (process.env.POWER_COST_PER_KWH ? NATIONAL_CURRENCY[country ?? ""] ?? "€" : "zł")
-  return { perKwh, currency, source: "ręczna" }
+  return { perKwh, currency, source: "manual" }
 }
 
 type CachedTariff = Tariff & { country: string; fetchedAt: number }
@@ -64,7 +64,7 @@ async function fetchEurostat(country: string): Promise<Tariff | null> {
       value: Record<string, number>
       dimension: { time: { category: { index: Record<string, number> } } }
     }
-    // Jeden kraj → klucz wartości = indeks półrocza; bierzemy najnowsze z wartością.
+    // One country → the value key = the half-year index; we take the newest one that has a value.
     const periods = Object.entries(data.dimension.time.category.index).sort((a, b) => b[1] - a[1])
     for (const [period, index] of periods) {
       const perKwh = data.value[String(index)]

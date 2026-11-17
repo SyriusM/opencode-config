@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Automatyczne kopie plików konfiguracji opencode (robi je wtyczka auto-backup przed każdą zmianą).
-#   backup-copy                  lista plików, które mają kopie (ile, ostatnia)
-#   backup-copy FRAGMENT         kopie plików pasujących do fragmentu nazwy, np.: backup-copy AGENTS
-#   backup-copy diff KOPIA       różnica: kopia → obecny plik
-#   backup-copy restore KOPIA    przywraca plik z kopii (obecną wersję najpierw też zapisuje jako kopię)
-# Zgodność wstecz: „przywroc” = restore.
+# Automatic backups of opencode config files (made by the auto-backup plugin before every change).
+#   backup-copy                  list files that have backups (count, latest)
+#   backup-copy FRAGMENT         backups of files matching a name fragment, e.g.: backup-copy AGENTS
+#   backup-copy diff BACKUP      difference: backup → current file
+#   backup-copy restore BACKUP   restores the file from a backup (the current version is backed up first)
+# Backward compatible: "przywroc" = restore.
 set -u
 BACKUP_DIR="$HOME/oc-audyt/auto-kopie"
 
@@ -20,7 +20,7 @@ original_of() {
 find_backup() {
   if [ -f "$1" ]; then echo "$1"; return 0; fi
   if [ -f "$BACKUP_DIR/$1" ]; then echo "$BACKUP_DIR/$1"; return 0; fi
-  echo "Nie ma takiej kopii: $1" >&2
+  echo "No such backup: $1" >&2
   return 1
 }
 
@@ -28,12 +28,12 @@ case "${1:-}" in
   "")
     ls "$BACKUP_DIR" 2>/dev/null | sed 's/\.[0-9]\{8\}-[0-9]\{6\}$//' | sort | uniq -c | while read -r n b; do
       latest=$(ls "$BACKUP_DIR" | grep -F "$b." | sort | tail -1)
-      echo "$n kopii | ostatnia ${latest##*.} | $(original_of "$latest")"
+      echo "$n backups | latest ${latest##*.} | $(original_of "$latest")"
     done
     ;;
   diff)
     k=$(find_backup "${2:-}") || exit 1
-    diff -u "$k" "$(original_of "$k")" && echo "Bez różnic."
+    diff -u "$k" "$(original_of "$k")" && echo "No differences."
     ;;
   restore|przywroc)
     k=$(find_backup "${2:-}") || exit 1
@@ -44,7 +44,7 @@ case "${1:-}" in
       while dst="$BACKUP_DIR/${b%.*}.$(date +%Y%m%d-%H%M%S)"; [ -e "$dst" ]; do sleep 1; done
       cp -p "$target" "$dst"
     fi
-    cp -p "$k" "$target" && echo "Przywrócono $target z $b"
+    cp -p "$k" "$target" && echo "Restored $target from $b"
     ;;
   *)
     ls "$BACKUP_DIR" 2>/dev/null | grep -i -- "$1" | while read -r f; do

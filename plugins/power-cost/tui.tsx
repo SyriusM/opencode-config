@@ -4,25 +4,25 @@ import { createSignal, Show } from "solid-js"
 import { FALLBACK_TARIFF, resolveTariff, type Tariff } from "./tariff.ts"
 
 // POWER-COST STATUSLINE (OpenCode V2, CLI plugin)
-// Narastający koszt prądu zużytego przez GPU (NVIDIA) od startu TUI (w walucie stawki), plus stan karty.
-//   - pasek boczny (sidebar.content): pełna sekcja „Prąd i GPU”
-//   - dół (prompt.footer.status): skrót — widoczny też, gdy pasek boczny jest schowany
+// Running cost of the electricity used by the GPU (NVIDIA) since the TUI started (in the tariff currency), plus the card state.
+//   - sidebar (sidebar.content): the full "Power & GPU" section
+//   - bottom (prompt.footer.status): a short version — visible also when the sidebar is hidden
 //
-// Stawka (pierwsza dostępna wygrywa):
-//   1. POWER_COST_PER_KWH (albo stara POWER_COST_PLN_PER_KWH) — ręcznie, brutto z faktury,
-//      waluta z POWER_COST_CURRENCY (domyślnie wg kraju),
-//   2. Eurostat nrg_pc_204: średnia cena dla gospodarstw domowych (2500–4999 kWh/rok,
-//      ze wszystkimi podatkami), ostatnie półrocze; kraj z POWER_COST_COUNTRY albo LANG,
-//      cache w ~/.cache/power-cost.json na 30 dni (nieaktualny cache = zapas, gdy brak sieci),
-//   3. 1,26 zł/kWh.
+// Tariff (the first available one wins):
+//   1. POWER_COST_PER_KWH (or the old POWER_COST_PLN_PER_KWH) — by hand, gross from the bill,
+//      currency from POWER_COST_CURRENCY (default by country),
+//   2. Eurostat nrg_pc_204: average household price (2500–4999 kWh/year,
+//      all taxes included), latest half-year; country from POWER_COST_COUNTRY or LANG,
+//      cached in ~/.cache/power-cost.json for 30 days (a stale cache = fallback when offline),
+//   3. 1.26 zł/kWh.
 // Pomiar: nvidia-smi co 5 s, prosta integracja Wh. Model: aktywny unit llama-* (co 15 s).
 //
-// Layout pluginu (wymagany przez discovery): index.ts + tui.tsx.
+// Plugin layout (required by discovery): index.ts + tui.tsx.
 
 const SAMPLE_MS = 5_000
 const MODEL_EVERY_N_TICKS = 3
 
-// llama-* unit → nazwa w UI (tylko modele na GPU; proxy i embeddingi pomijamy)
+// llama-* unit → name in the UI (GPU models only; proxies and embeddings are skipped)
 const MODEL_UNITS: Record<string, string> = {
   "llama-qwen36.service": "Qwen 35B",
   "llama-qwen36v.service": "Qwen 35B vision",
@@ -85,19 +85,19 @@ type GpuSample = {
   fanPct: number | null
 }
 
-// Stan globalny (przeżywa re-render slotu; jedna próbka na proces TUI).
+// Global state (survives slot re-renders; one sample per TUI process).
 const [gpu, setGpu] = createSignal<GpuSample | null>(null)
 const [energyWh, setEnergyWh] = createSignal(0)
 const [peakWatts, setPeakWatts] = createSignal(0)
 const [model, setModel] = createSignal<string | null>(null)
 const startedAt = Date.now()
-// Zegar jako sygnał — sam Date.now() w JSX nie odświeża widoku.
+// Clock as a signal — Date.now() alone in JSX does not refresh the view.
 const [now, setNow] = createSignal(startedAt)
 const [tariff, setTariff] = createSignal<Tariff>(FALLBACK_TARIFF)
 
 // koszt = energia [Wh] * stawka [waluta/kWh] / 1000
 const cost = () => (energyWh() * tariff().perKwh) / 1000
-// koszt godziny przy bieżącym poborze
+// cost of an hour at the current draw
 const costPerHour = () => ((gpu()?.watts ?? 0) * tariff().perKwh) / 1000
 
 let lastSampleAt = Date.now()
@@ -173,14 +173,14 @@ function uptime() {
   return minutes < 60 ? `${minutes} min` : `${Math.floor(minutes / 60)} h ${minutes % 60} min`
 }
 
-// Kolor temperatury: zwykły do 70°C, ostrzeżenie do 80°C, potem błąd.
+// Temperature colour: normal up to 70°C, warning up to 80°C, then error.
 function tempColor(theme: any, tempC: number) {
   if (tempC >= 80) return theme.text.feedback.error.base
   if (tempC >= 70) return theme.text.feedback.warning.base
   return theme.text.muted
 }
 
-// Sygnały czytane tylko w JSX — odczyt w ciele komponentu nie odświeżałby się.
+// Signals read only in JSX — a read in the component body would not refresh.
 function FooterStatus() {
   const context = usePlugin()
   const gpuText = () => {
@@ -213,7 +213,7 @@ function SidebarSection() {
   return (
     <box>
       <text fg={theme.text.base}>
-        <b>Prąd i GPU</b>
+        <b>Power &amp; GPU</b>
       </text>
       <Show when={model()}>{(name) => <text fg={theme.text.muted}>model: {name()}</text>}</Show>
       <text fg={speed() ? theme.text.base : theme.text.muted}>{speedText()}</text>
@@ -221,7 +221,7 @@ function SidebarSection() {
         {(sample) => (
           <>
             <text fg={theme.text.muted}>
-              {pl(sample().watts, 1)} W (szczyt {pl(peakWatts(), 0)} W) · obciąż. {pl(sample().utilPct, 0)}%
+              {pl(sample().watts, 1)} W (peak {pl(peakWatts(), 0)} W) · load {pl(sample().utilPct, 0)}%
             </text>
             <text fg={tempColor(theme, sample().tempC)}>
               {pl(sample().tempC, 0)}°C
@@ -237,7 +237,7 @@ function SidebarSection() {
         {pl(cost(), 4)} {tariff().currency} · {pl(energyWh(), 1)} Wh
       </text>
       <text fg={theme.text.muted}>
-        {pl(costPerHour(), 3)} {tariff().currency}/h teraz · od {uptime()}
+        {pl(costPerHour(), 3)} {tariff().currency}/h now · since {uptime()}
       </text>
       <text fg={theme.text.muted}>
         stawka {pl(tariff().perKwh, 4)} {tariff().currency}/kWh ({tariff().source})

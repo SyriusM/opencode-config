@@ -25,10 +25,10 @@ class H(http.server.BaseHTTPRequestHandler):
                                 "palace": "PALACE-MARKER" in json.dumps(msgs, ensure_ascii=False)}) + "\n")
         s.send_response(200); s.send_header("Content-Type", "text/event-stream"); s.end_headers()
         if after_tools:
-            parts = [chunk({"role": "assistant", "content": "Pliku nie ma. "}), chunk({"content": "Koniec."}),
+            parts = [chunk({"role": "assistant", "content": "The file does not exist. "}), chunk({"content": "The end."}),
                      chunk({}, "stop")]
         else:
-            args = json.dumps({"path": os.path.expanduser("~/demo/nie-istnieje.txt")})
+            args = json.dumps({"path": os.path.expanduser("~/demo/does-not-exist.txt")})
             parts = [chunk({"role": "assistant", "tool_calls": [{"index": 0, "id": "call_1", "type": "function",
                             "function": {"name": "read", "arguments": args}}]}), chunk({}, "tool_calls")]
         for p in parts:

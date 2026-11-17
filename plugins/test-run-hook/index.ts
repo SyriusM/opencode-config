@@ -3,12 +3,12 @@ import { homedir } from "node:os"
 import { dirname, isAbsolute, join } from "node:path"
 import { execFileSync } from "node:child_process"
 
-// TEST-RUN-HOOK — po każdym udanym write/edit pliku .py uruchamia skrypty testowe z tego samego katalogu
-// (test_*.py / *_test.py z blokiem __main__, bez pytesta) i dokleja wynik do wyniku narzędzia.
-// Powód (10-28, trening zadania 10/16/27): Gemma kończyła pracę bez uruchomienia testu, a test nie przechodził.
-// Milczy przy: braku testów, >3 plikach testowych, pyproject/setup.py/pytest.ini w katalogu lub ≤3 poziomy wyżej
-// (prawdziwy projekt — tam testy uruchamia model). Ten sam błąd po raz drugi = krótka notka.
-// Wyłączenie: TEST_RUN_HOOK=off. Log: ~/.mempalace/hook_state/test_run_hook.log
+// TEST-RUN-HOOK — after every successful write/edit of a .py file runs the test scripts from the same directory
+// (test_*.py / *_test.py with a __main__ block, no pytest) and appends the result to the tool result.
+// Reason (10-28, training tasks 10/16/27): Gemma finished without running the test, and the test did not pass.
+// Silent when: no tests, >3 test files, pyproject/setup.py/pytest.ini in the directory or ≤3 levels up
+// (a real project — there the model runs the tests). The same error a second time = a short note.
+// Disable: TEST_RUN_HOOK=off. Log: ~/.mempalace/hook_state/test_run_hook.log
 
 const HOME = homedir()
 const LOG = join(HOME, ".mempalace", "hook_state", "test_run_hook.log")
@@ -78,7 +78,7 @@ export default {
             oks.push(`${t}: ${out.trim().split("\n").pop() ?? "OK"}`)
           } catch (e: any) {
             const out = `${e?.stdout ?? ""}${e?.stderr ?? ""}`.trim().split("\n")
-            const why = e?.killed ? "przekroczony czas 20 s" : `kod wyjścia ${e?.status}`
+            const why = e?.killed ? "timed out after 20 s" : `exit code ${e?.status}`
             fails.push(`${t} (${why}):\n${out.slice(-TAIL_LINES).join("\n")}`)
           }
         }
@@ -86,12 +86,12 @@ export default {
         if (fails.length) {
           const body = fails.join("\n\n")
           text = last.get(key) === body
-            ? `\n\ntest-run (automatycznie): test nadal nie przechodzi, ten sam błąd. Przeczytaj go i popraw kod, zanim napiszesz, że gotowe.`
-            : `\n\ntest-run (automatycznie po zmianie pliku .py): TEST NIE PRZECHODZI. Nie pisz, że gotowe, dopóki nie przejdzie:\n${body}`
+            ? `\n\ntest-run (automatic): the test still fails with the same error. Read it and fix the code before you say it is done.`
+            : `\n\ntest-run (automatic after a .py file change): THE TEST FAILS. Do not say it is done until it passes:\n${body}`
           if (last.size > 200) last.clear()
           last.set(key, body)
         } else if (oks.length && last.has(key)) {
-          text = `\n\ntest-run (automatycznie): testy teraz przechodzą — ${oks.join("; ")}. To uruchomiła wtyczka, nie Ty: w raporcie napisz „test uruchomiony automatycznie”, albo uruchom go sam narzędziem shell.`
+          text = `\n\ntest-run (automatic): the tests pass now — ${oks.join("; ")}. The plugin ran this, not you: write "test run automatically" in your report, or run it yourself with the shell tool.`
           last.delete(key)
         }
         if (!text) return

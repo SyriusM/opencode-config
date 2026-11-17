@@ -2,12 +2,12 @@ import { appendFileSync, copyFileSync, existsSync, mkdirSync, readFileSync, read
 import { homedir } from "node:os"
 import { join } from "node:path"
 
-// AUTO-KOPIE — siatka bezpieczeństwa: przed każdą zmianą pliku konfiguracji opencode, skilla, usługi albo skryptu
-// zapisuje jego poprzednią wersję. Osobna wtyczka CELOWO: nie zależy od tool-input-fix (którą /self-repair edytuje),
-// więc działa także wtedy, gdy tamta jest zepsuta. TEJ WTYCZKI NIE EDYTUJE SIĘ podczas /self-repair — strażnik
-// (~/oc-audyt/straznik-wtyczki.sh) pilnuje jej sumy kontrolnej i przywraca oryginał.
-// Hook V2: ctx.tool.hook("execute.before"). Nigdy nie blokuje narzędzia i nigdy nie rzuca.
-// Log: ~/.mempalace/hook_state/tool_input_fix.log (wpisy KOPIA). Cofanie: ~/bin/oc-kopie.
+// AUTO-BACKUP — a safety net: before every change to an opencode config file, a skill, a service or a script
+// it saves the previous version. A separate plugin ON PURPOSE: it does not depend on tool-input-fix (which /self-repair edits),
+// so it works even when that one is broken. THIS PLUGIN IS NOT EDITED during /self-repair — a guard
+// (~/oc-audyt/straznik-wtyczki.sh) watches its checksum and restores the original.
+// Hook V2: ctx.tool.hook("execute.before"). Never blocks a tool and never throws.
+// Log: ~/.mempalace/hook_state/tool_input_fix.log (KOPIA entries). Restore: ~/bin/oc-kopie.
 
 const HOME = homedir()
 const LOG = join(HOME, ".mempalace", "hook_state", "tool_input_fix.log")
@@ -20,9 +20,9 @@ function log(line: string) {
 }
 
 // ── AUTOMATYCZNE KOPIE ────────────────────────────────────────────────────────────────────────────
-// Przed każdą zmianą pliku konfiguracji opencode / skilla / usługi zapisujemy jego poprzednią wersję do
-// ~/oc-audyt/auto-kopie/ŚCIEŻKA__Z__PODKREŚLENIAMI.RRRRMMDD-GGMMSS — niezależnie od tego, czy model o tym pamięta.
-// Przywracanie: ~/bin/oc-kopie. Nigdy nie blokujemy narzędzia i nigdy nie rzucamy.
+// Before every change to an opencode config file / skill / service we save its previous version to
+// ~/oc-audyt/auto-kopie/PATH__WITH__UNDERSCORES.YYYYMMDD-HHMMSS — whether or not the model remembers to.
+// Restore: ~/bin/oc-kopie. We never block the tool and never throw.
 const BACKUP_DIR = join(HOME, "oc-audyt", "auto-kopie")
 const PROTECTED = [
   /^\.config\/opencode\/(AGENTS\.md|opencode\.json|cli\.json)$/,
@@ -32,7 +32,7 @@ const PROTECTED = [
   /^\.config\/systemd\/user\/.+\.(service|socket|timer|conf)$/,
   /^bin\/[^/]+$/,
   /^CLAUDE\.md$/,
-  // test i strażnik wtyczki — żeby zmianę w nich też dało się cofnąć
+  // the plugin test and guard — so a change to them can be undone too
   /^oc-audyt\/(przypadki-[\w-]+\.json|test-wtyczki\.(sh|mjs)|straznik-wtyczki\.sh|powtorka-historii\.sh|licznik-bledow\.py)$/,
 ]
 
@@ -60,14 +60,14 @@ function backupFile(abs: string): string | undefined {
     const base = "H__" + abs.slice(HOME.length + 1).replace(/\//g, "__")
     const existing = readdirSync(BACKUP_DIR).filter((f) => f.startsWith(base + ".")).sort()
     const latest = existing[existing.length - 1]
-    // bez duplikatów: ta sama treść co ostatnia kopia = nic nie rób
+    // no duplicates: same content as the last copy = do nothing
     if (latest && readFileSync(join(BACKUP_DIR, latest)).equals(readFileSync(abs))) return undefined
     const d = new Date()
     const p2 = (n: number) => String(n).padStart(2, "0")
     const stamp = `${d.getFullYear()}${p2(d.getMonth() + 1)}${p2(d.getDate())}-${p2(d.getHours())}${p2(d.getMinutes())}${p2(d.getSeconds())}`
     const target = join(BACKUP_DIR, `${base}.${stamp}`)
     copyFileSync(abs, target)
-    // najwyżej 30 kopii na plik
+    // at most 30 copies per file
     for (const old of existing.slice(0, Math.max(0, existing.length - 29))) unlinkSync(join(BACKUP_DIR, old))
     return target
   } catch {
@@ -75,9 +75,9 @@ function backupFile(abs: string): string | undefined {
   }
 }
 
-// Zwraca listę wykonanych kopii. Narzędzia plikowe: po kluczu path. Shell: każde słowo polecenia sprawdzamy
-// jako ścieżkę względem katalogu domowego, katalogu roboczego sesji i wszystkich katalogów z `cd …` w poleceniu
-// (modele piszą `cd ~/.config/opencode && sed -i … AGENTS.md`). kopiaPliku() sama odrzuca pliki niechronione.
+// Returns the list of copies made. File tools: by the path key. Shell: every word of the command is checked
+// as a path relative to the home directory, the session's working directory and every directory from `cd …` in the command
+// (models write `cd ~/.config/opencode && sed -i … AGENTS.md`). kopiaPliku() itself rejects unprotected files.
 function autoBackup(tool: string, input: any, cwd?: string): string[] {
   const done: string[] = []
   const seen = new Set<string>()
@@ -104,10 +104,10 @@ function autoBackup(tool: string, input: any, cwd?: string): string[] {
       }
     } else if (/^(shell|bash|fish)$/.test(tool) && typeof input.command === "string") {
       const cmd: string = input.command
-      // jedno polecenie tylko do odczytu → bez kopii
+      // a single read-only command → no copy
       if (/^\s*(cat|grep|rg|ls|head|tail|wc|diff|stat|file|less|find|du)\b[^|;&>]*$/.test(cmd)) return done
       const words = cmd.split(/[\s"'`;|&<>()=]+/).filter((w) => w && !w.startsWith("-") && w.length < 300)
-      // katalogi robocze: start + kolejne `cd X` (każdy liczony względem poprzedniego)
+      // working directories: the start + each following `cd X` (each relative to the previous one)
       const dirs = [base]
       if (base !== HOME) dirs.push(HOME)
       let current = base
@@ -118,7 +118,7 @@ function autoBackup(tool: string, input: any, cwd?: string): string[] {
         }
       }
       for (const w of words) {
-        if (!/[./~$]/.test(w)) continue // interesują nas tylko słowa wyglądające na ścieżkę albo plik z rozszerzeniem
+        if (!/[./~$]/.test(w)) continue // we only care about words that look like a path or a file with an extension
         for (const d of dirs) addAbs(relativeTo(d, w))
       }
     }

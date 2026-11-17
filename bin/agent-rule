@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Reguły wyuczone w AGENTS.md — jedyne miejsce, w którym model sam dopisuje reguły.
-# Blok między znacznikami <!-- LEARNED:START --> i <!-- LEARNED:END -->, najwyżej 10 linii, najstarsza wypada.
-#   agent-rule                 pokaż reguły (z numerami)
-#   agent-rule add "TEKST"     dopisz regułę (jedna linia, do 200 znaków, z przykładem wywołania)
-#   agent-rule remove N        usuń regułę nr N
-# Przed każdą zmianą zapisuje kopię do ~/oc-audyt/auto-kopie (cofanie: ~/bin/backup-copy).
-# Zgodność wstecz: podkomendy dodaj/usun i znaczniki WYUCZONE:START/END też działają.
+# Learned rules in AGENTS.md — the only place where the model adds rules itself.
+# Block between <!-- LEARNED:START --> and <!-- LEARNED:END -->, at most 10 lines, the oldest drops out.
+#   agent-rule                 show the rules (numbered)
+#   agent-rule add "TEXT"      add a rule (one line, up to 200 chars, with an example call)
+#   agent-rule remove N        remove rule no. N
+# Saves a backup to ~/oc-audyt/auto-kopie before every change (undo: ~/bin/backup-copy).
+# Backward compatible: subcommands dodaj/usun and markers WYUCZONE:START/END also work.
 set -u
 FILE="$HOME/.config/opencode/AGENTS.md"
 BACKUP_DIR="$HOME/oc-audyt/auto-kopie"
@@ -17,7 +17,7 @@ for tag in LEARNED WYUCZONE; do
   grep -qF "$S" "$FILE" && grep -qF "$E" "$FILE" && break
   S=""
 done
-[ -n "$S" ] || { echo "Brak znaczników bloku <!-- LEARNED:START/END --> w $FILE" >&2; exit 1; }
+[ -n "$S" ] || { echo "No <!-- LEARNED:START/END --> block markers in $FILE" >&2; exit 1; }
 
 rules() { awk -v s="$S" -v e="$E" '$0==s{f=1;next} $0==e{f=0} f && /^- /' "$FILE"; }
 
@@ -41,24 +41,24 @@ save() {  # stdin = new rule lines
 case "${1:-}" in
   "")
     n=$(rules | wc -l)
-    echo "Reguły wyuczone: $n z $MAX"
+    echo "Learned rules: $n of $MAX"
     rules | nl -w2 -s'. '
     ;;
   add|dodaj)
     t="${2:-}"
     t=$(printf '%s' "$t" | tr '\n' ' ' | sed 's/  */ /g; s/^ //; s/ $//')
-    [ -n "$t" ] || { echo "Podaj tekst reguły w cudzysłowie." >&2; exit 1; }
-    [ "${#t}" -le 200 ] || { echo "Za długa (${#t} znaków, limit 200). Skróć: co robić + jeden przykład." >&2; exit 1; }
-    if rules | grep -qF -- "$t"; then echo "Taka reguła już jest."; exit 0; fi
+    [ -n "$t" ] || { echo "Give the rule text in quotes." >&2; exit 1; }
+    [ "${#t}" -le 200 ] || { echo "Too long (${#t} chars, limit 200). Shorten it: what to do + one example." >&2; exit 1; }
+    if rules | grep -qF -- "$t"; then echo "This rule already exists."; exit 0; fi
     { rules; echo "- $(date +%F) $t"; } | tail -n "$MAX" | save
-    echo "Dopisano. $(rules | wc -l) z $MAX reguł, plik $(wc -c < "$FILE") bajtów. Cofnięcie: ~/bin/backup-copy AGENTS"
+    echo "Added. $(rules | wc -l) of $MAX rules, file $(wc -c < "$FILE") bytes. Undo: ~/bin/backup-copy AGENTS"
     ;;
   remove|usun)
     n="${2:-}"
-    [[ "$n" =~ ^[0-9]+$ ]] || { echo "Podaj numer reguły (zobacz: agent-rule)." >&2; exit 1; }
-    [ "$n" -ge 1 ] && [ "$n" -le "$(rules | wc -l)" ] || { echo "Nie ma reguły nr $n." >&2; exit 1; }
+    [[ "$n" =~ ^[0-9]+$ ]] || { echo "Give the rule number (see: agent-rule)." >&2; exit 1; }
+    [ "$n" -ge 1 ] && [ "$n" -le "$(rules | wc -l)" ] || { echo "There is no rule no. $n." >&2; exit 1; }
     rules | sed "${n}d" | save
-    echo "Usunięto regułę nr $n."
+    echo "Removed rule no. $n."
     ;;
   *)
     sed -n '2,8p' "$0" | sed 's/^# \{0,1\}//'

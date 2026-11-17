@@ -1,9 +1,9 @@
 #!/bin/sh
-# Okno z hasłem dla `sudo -A` — agent (bez terminala) może użyć sudo, a hasło wpisuje człowiek.
-# Użycie: SUDO_ASKPASS=~/bin/sudo-askpass sudo -A KOMENDA
-# Nic nie zapamiętuje (celowo nie KWallet: zapisane hasło = root dla każdego procesu użytkownika).
+# Password dialog for `sudo -A` — an agent (no terminal) can use sudo while a human types the password.
+# Usage: SUDO_ASKPASS=~/bin/sudo-askpass sudo -A COMMAND
+# Stores nothing (deliberately no KWallet: a saved password = root for every user process).
 prompt="${1:-Password for sudo:}"
-# pokaż, na co człowiek się zgadza: komenda procesu sudo, który wywołał to okno (z /proc, nie do podrobienia przez wywołującego)
+# show what the human is agreeing to: the command of the sudo process that opened this dialog (from /proc, the caller cannot fake it)
 cmd=$(tr '\0' ' ' < "/proc/$PPID/cmdline" 2>/dev/null)
 [ -n "$cmd" ] && prompt="$prompt
 

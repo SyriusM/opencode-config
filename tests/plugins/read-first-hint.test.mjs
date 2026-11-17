@@ -24,40 +24,40 @@ const badEdit = (sid, path = file) => {
 // 1. session saw other activity, never read the file
 ok("s1", "shell", { command: "ls" })
 let m = badEdit("s1")
-check(/nie wczytałeś pliku/.test(m) && m.includes(file), "never-read: hint expected, got " + m.slice(0, 160))
-check(/PODPOWIED/.test(m), "never-read: similar-lines hint still appended")
+check(/have not read the file/.test(m) && m.includes(file), "never-read: hint expected, got " + m.slice(0, 160))
+check(/HINT:/.test(m), "never-read: similar-lines hint still appended")
 
 // 2. after a full read: no read-first hint
 ok("s2", "shell", { command: "ls" })
 ok("s2", "read", { filePath: file })
 m = badEdit("s2")
-check(!/UWAGA/.test(m), "after read: no read-first hint, got " + m.slice(0, 160))
+check(!/NOTE:/.test(m), "after read: no read-first hint, got " + m.slice(0, 160))
 
-// 3. partial read (offset/limit) → "fragmentami"
+// 3. partial read (offset/limit) → "only in parts"
 ok("s3", "read", { filePath: file, offset: 1, limit: 1 })
 m = badEdit("s3")
-check(/fragmentami/.test(m), "partial read: fragment hint expected, got " + m.slice(0, 160))
+check(/only in parts/.test(m), "partial read: fragment hint expected, got " + m.slice(0, 160))
 // ...and a later full read clears it
 ok("s3", "read", { filePath: file })
-check(!/UWAGA/.test(badEdit("s3")), "partial then full read: no hint")
+check(!/NOTE:/.test(badEdit("s3")), "partial then full read: no hint")
 
 // 4. first event of a session (plugin reloaded mid-session) → silent
 m = badEdit("s4")
-check(!/UWAGA/.test(m), "first event in session: no hint (unknown history)")
+check(!/NOTE:/.test(m), "first event in session: no hint (unknown history)")
 
 // 5. cat in shell counts as seen
 ok("s5", "shell", { command: `cat ${file}` })
-check(!/UWAGA/.test(badEdit("s5")), "cat in shell counts as read")
+check(!/NOTE:/.test(badEdit("s5")), "cat in shell counts as read")
 
 // 6. ~ path normalized; write counts; sessions independent
 ok("s6", "write", { filePath: file, content: "x" })
-check(!/UWAGA/.test(badEdit("s6")), "write counts as seen")
-check(/nie wczytałeś/.test(badEdit("s1")), "other session's reads do not leak into s1")
+check(!/NOTE:/.test(badEdit("s6")), "write counts as seen")
+check(/have not read/.test(badEdit("s1")), "other session's reads do not leak into s1")
 // 7. real opencode session id created after plugin load: first event is an edit → hint (10-20 live miss)
 const sidAt = (ms) => "ses_" + ((~(BigInt(ms) * 4096n)) & ((1n << 48n) - 1n)).toString(16).padStart(12, "0") + "TestTestTestTe"
 m = badEdit(sidAt(Date.now()))
-check(/nie wczytałeś pliku/.test(m), "new session, edit first: hint expected, got " + m.slice(0, 160))
+check(/have not read the file/.test(m), "new session, edit first: hint expected, got " + m.slice(0, 160))
 // ...but a session created long before plugin load stays silent (history unknown)
-check(!/UWAGA/.test(badEdit(sidAt(Date.now() - 3600e3))), "old session, edit first: no hint")
+check(!/NOTE:/.test(badEdit(sidAt(Date.now() - 3600e3))), "old session, edit first: no hint")
 console.log(fails ? `FAILED: ${fails}` : "ALL OK")
 process.exit(fails ? 1 : 0)

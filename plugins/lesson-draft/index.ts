@@ -3,13 +3,13 @@ import { homedir } from "node:os"
 import { join } from "node:path"
 import { spawn } from "node:child_process"
 
-// LESSON-DRAFT PLUGIN — wykrywa wzorce powtarzalnych błędów w sesji
-// (rate-limit, powtórzony fail tego samego tool-a, timeouty) i zapisuje
-// DRAFT do pliku do RĘCZNEGO przeglądu. NIE dotyka AGENTS.md automatycznie
-// — to świadoma decyzja (AGENTS.md mówi: zmiany tam = na prośbę + diff).
+// LESSON-DRAFT PLUGIN — detects patterns of repeated errors in a session
+// (rate-limit, the same tool failing repeatedly, timeouts) and writes a
+// DRAFT to a file for MANUAL review. It does NOT touch AGENTS.md automatically
+// — a deliberate decision (AGENTS.md says: changes there = on request + diff).
 //
 // Wzorowany na plugins/notify/index.ts (defensive try/catch, zero throw,
-// zero wpływu na kontekst/tokeny sesji).
+// zero impact on the session context/tokens).
 
 const HOME = homedir()
 const STATE_DIR = join(HOME, ".mempalace", "hook_state")
@@ -31,7 +31,7 @@ const ERROR_PATTERNS = [
   /\b404\b/,
   /not found/i,
   /no such file/i,
-  /invalid arguments/i, // zły klucz/typ argumentu (np. filePath zamiast path) — częste u lokalnych modeli
+  /invalid arguments/i, // wrong argument key/type (e.g. filePath instead of path) — common with local models
 ]
 
 function log(line: string) {
@@ -39,7 +39,7 @@ function log(line: string) {
     mkdirSync(STATE_DIR, { recursive: true })
     appendFileSync(DEBUG_LOG, `[${new Date().toISOString()}] ${line}\n`)
   } catch {
-    // nie psuć sesji
+    // don't break the session
   }
 }
 
@@ -57,9 +57,9 @@ function notify(body: string) {
   }
 }
 
-// Heurystyka: licz ile razy każdy wzorzec błędu wystąpił w outputach tool-i,
-// i ile razy ten sam tool+pattern powtórzył się (= prawdopodobny death-loop
-// albo fałszywy sygnał traktowany jako fakt).
+// Heuristic: count how many times each error pattern occurred in tool outputs,
+// and how many times the same tool+pattern repeated (= a likely death-loop
+// or a false signal treated as a fact).
 function analyze(messages: Array<{ info: any; parts: any[] }>): {
   hits: Array<{ tool: string; pattern: string; count: number; sample: string }>
 } {
@@ -100,14 +100,14 @@ function writeDraft(sessionID: string, hits: Array<{ tool: string; pattern: stri
   try {
     mkdirSync(join(HOME, "tmp-opencode"), { recursive: true })
     const ts = new Date().toISOString()
-    let block = `\n## ${ts} — sesja ${sessionID}\n`
+    let block = `\n## ${ts} — session ${sessionID}\n`
     for (const h of hits) {
-      block += `- tool \`${h.tool}\`: wzorzec błędu \`${h.pattern}\` wystąpił ${h.count}× (próbka: "${h.sample}")\n`
+      block += `- tool \`${h.tool}\`: error pattern \`${h.pattern}\` occurred ${h.count}× (sample: "${h.sample}")\n`
     }
-    block += `- ⏳DO PRZEGLĄDU: czy to realny wzorzec do zapisania w AGENTS.md/CLAUDE.md, czy szum. Ręcznie wrzuć jeśli tak, potem usuń ten blok.\n`
+    block += `- ⏳TO REVIEW: is this a real pattern worth adding to AGENTS.md/CLAUDE.md, or noise? Add it by hand if so, then delete this block.\n`
     appendFileSync(DRAFT_FILE, block)
     log(`draft written for session ${sessionID}, hits=${hits.length}`)
-    notify(`sesja ${sessionID.slice(-8)}: ${hits.length} wzorzec(ów) błędów — zob. ~/tmp-opencode/lessons-draft.md`)
+    notify(`session ${sessionID.slice(-8)}: ${hits.length} error pattern(s) — see ~/tmp-opencode/lessons-draft.md`)
   } catch (e) {
     log(`writeDraft error: ${String(e)}`)
   }
@@ -122,23 +122,23 @@ export default {
     const controller = new AbortController()
     log("plugin-load lesson-draft")
 
-    // V2 (2.0.24): brak ctx.client — błędy zbieramy wprost ze strumienia zdarzeń session.tool.*,
-    // a analizujemy na końcu tury (session.execution.succeeded/failed; session.idle nie istnieje).
+    // V2 (2.0.24): no ctx.client — errors are collected straight from the session.tool.* event stream,
+    // and analyzed at the end of the turn (session.execution.succeeded/failed; session.idle does not exist).
     let shownShape = false
     let shownCalled = false
     let shownInput = false
     const g = globalThis as any
-    // wspólne dla wszystkich instancji (jedna na lokalizację) — zdarzenie obsługuje ta, która zobaczy je pierwsza
+    // shared by all instances (one per location) — the event is handled by whichever sees it first
     const seen: Set<string> = (g.__lessonDraftSeen ??= new Set<string>())
     const buffer: Map<string, Array<{ type: string; parts: any[] }>> = (g.__lessonDraftBuffer ??= new Map())
-    const toolNames: Map<string, string> = (g.__lessonDraftToolNames ??= new Map()) // id wywołania → nazwa narzędzia
+    const toolNames: Map<string, string> = (g.__lessonDraftToolNames ??= new Map()) // call id → tool name
     void (async () => {
       try {
         for await (const event of ctx.event.subscribe({ signal: controller.signal })) {
           const ev = event as any
           const sessionID = ev?.data?.sessionID ?? ev?.properties?.sessionID ?? ev?.sessionID
           if (!sessionID) continue
-          // wtyczka ma instancję na każdą lokalizację, a strumień jest wspólny — każde zdarzenie raz
+          // the plugin has an instance per location, and the stream is shared — each event once
           if (ev.id) {
             if (seen.has(ev.id)) continue
             if (seen.size > 20000) seen.clear()
@@ -177,7 +177,7 @@ export default {
           log(`turn end ${sessionID}: tool errors=${list.length} hits=${hits.length}`)
           if (hits.length > 0) {
             writeDraft(sessionID, hits)
-            buffer.delete(sessionID) // ten sam wzorzec nie wraca w każdej kolejnej turze
+            buffer.delete(sessionID) // the same pattern does not come back on every later turn
           }
         }
       } catch (e) {

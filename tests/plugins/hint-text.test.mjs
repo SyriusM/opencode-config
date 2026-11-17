@@ -12,12 +12,12 @@ mkdirSync(root, { recursive: true })
 writeFileSync(join(root, "README.md"), "x\n")
 writeFileSync(join(root, "index.ts"), "x\n")
 const readme = join(root, "README.md")
-const guess = (p) => "Czy chodziło o " + p + "?"
+const guess = (p) => "Did you mean " + p + "?"
 const cases = [
   ["read", { filePath: `${noSlash}/Projekty/app-hint-text/README.md` }, guess(readme)],
   ["read", { filePath: `${noSlash}/Projekt/app-hint-text/README.md` }, guess(readme)],
   ["edit", { filePath: `${noSlash}/Projekty/app-hint-text/README.md`, oldString: "a", newString: "b" }, guess(readme)],
-  ["read", { filePath: `${noSlash}/xyz-missing/a.md` }, "Model zgaduje"],
+  ["read", { filePath: `${noSlash}/xyz-missing/a.md` }, "You are guessing paths"],
   ["read", { filePath: join(root, "index.ts") + "." }, guess(join(root, "index.ts"))],
   ["read", { filePath: readme }, null],
   ["read", { filePath: "src/main.py" }, null],
@@ -25,7 +25,7 @@ const cases = [
   ["read", { filePath: `${caseFlip(H)}/Projekty/app-hint-text/README.md` }, guess(readme)],
   ["read", { filePath: `${caseFlip(H)}/Projekt/app-hint-text/README.md` }, guess(readme)],
   ["read", { filePath: `${caseFlip(H).slice(1)}/Projekty/app-hint-text/README.md` }, guess(readme)],
-  ["read", { filePath: `${caseFlip(H)}/xyz-missing/a.md` }, "Model zgaduje"],
+  ["read", { filePath: `${caseFlip(H)}/xyz-missing/a.md` }, "You are guessing paths"],
   ["read", { filePath: "/home/some-other-user/a.md" }, null],
 ]
 let bad = 0

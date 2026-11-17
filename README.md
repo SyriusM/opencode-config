@@ -1,141 +1,141 @@
 # opencode-config
 
-Wtyczki i skrypty dla [opencode](https://opencode.ai) 2.x na **lokalnych modelach**. Pomagają ograniczyć powtarzanie tych samych błędów narzędzi i dają modelowi tło z [MemPalace](https://github.com/MemPalace/mempalace).
+Plugins and scripts for [opencode](https://opencode.ai) 2.x on **local models**. They cut down on repeated tool-call mistakes and give the model background from [MemPalace](https://github.com/MemPalace/mempalace).
 
-To czysty kod, bez konfiguracji modeli, promptów i danych.
+Plain code only — no model configs, personal prompts or data.
 
-> **English summary.** Plugins and scripts for [opencode](https://opencode.ai) 2.x running **local models only** (llama.cpp, no cloud, no subscription). They catch the typical failures of small local models: they fix malformed tool calls before they run, stop loops of identical failing calls, detect "results" the model made up without calling a tool, strip tool calls written as plain text, and block dangerous or outbound shell commands (`rm -rf ~`, `curl | bash`, `git push`, uploads). After edits they auto-run site linting and Python tests and feed the errors back to the model. `freecode` is opencode locked to local models, with a first-run setup wizard. `bootstrap.sh` detects your GPU, VRAM and driver, then installs llama.cpp, a fitting model, opencode and the plugins with one command. Developed and measured on an RTX 3080 (10 GB VRAM): Qwen3.6-35B-A3B runs at ~80–110 tok/s with a 128k context (MoE experts in RAM). Code and identifiers are in English; the rest of this README is in Polish.
+> 🇵🇱 Wersja polska: [README.pl.md](README.pl.md). Code, messages and agent prompts are in English (models handle it best); the model replies in the user's language.
 
 📝 Blog post on why and how: [English](https://syriusm.github.io/syriusm-blog/wpis-freecode-en.html) · [po polsku](https://syriusm.github.io/syriusm-blog/wpis-freecode.html).
 
-## Zawartość
+## Contents
 
-| Ścieżka | Co robi |
+| Path | What it does |
 |---|---|
-| `plugins/tool-input-fix` | Poprawia typowe błędy wejścia lokalnych modeli, zanim narzędzie ruszy: wyciek `</code>` z szablonu, `\"` poza stringami, ref-y Playwrighta, ms→s. Przerywa pętle identycznych nieudanych wywołań (`STOP` po 2×). Przy błędzie dokleja **ZNANE ROZWIĄZANIE** z kopalni wniosków. |
-| `plugins/lesson-draft` | Po każdej turze zbiera błędy narzędzi ze strumienia zdarzeń. Powtarzający się wzorzec zapisuje jako szkic lekcji do ręcznego przeglądu (`~/tmp-opencode/lessons-draft.md`). |
-| `plugins/palace-context` + `bin/palace-context` | Dokleja do promptu systemowego do 3 notatek z MemPalace dla katalogu sesji, tylko ze skrzydeł wybranych przy instalacji (domyślnie wszystkich; próg podobieństwa 0,57). Gdy embeddingi nie działają, dokleja ostrzeżenie zamiast pustki. |
-| `plugins/auto-thinking` | Dynamiczny limit myślenia dla wariantu „auto”: nowe polecenie → medium, udane narzędzie → low, błędy albo `LOOP-STOP` → high (podmienia `auto_thinking` na `thinking_budget_tokens` w zapytaniu). Gdy nie zadziała, serwer stosuje własny limit. |
-| `plugins/no-call-guard` | Wykrywa turę, w której model pokazał komendę z „wynikiem”, ale nie wywołał narzędzia (zmyślony wynik). Domyślnie tylko loguje; z `NO_CALL_GUARD=act` dopisuje notkę, która każe uruchomić komendę albo przyznać, że jej nie uruchamiał. |
-| `plugins/power-cost` | Wtyczka TUI: koszt prądu GPU od startu. Stawka: ręczna z `POWER_COST_PER_KWH` (+ `POWER_COST_CURRENCY`; stara `POWER_COST_PLN_PER_KWH` też działa), inaczej średnia dla gospodarstw domowych z Eurostatu (`nrg_pc_204`, 2500–4999 kWh/rok, z podatkami, ostatnie półrocze) dla kraju z `POWER_COST_COUNTRY` albo `LANG`, w walucie kraju, cache `~/.cache/power-cost.json` na 30 dni; bez sieci i cache 1,26 zł/kWh i stan karty z `nvidia-smi`. W pasku bocznym sekcja „Prąd i GPU” (model, waty i szczyt, obciążenie, temperatura, wentylator, VRAM, Wh, koszt/h, stawka i źródło), na dole skrót `⚡ koszt · W · °C`, widoczny też przy schowanym pasku. Tylko NVIDIA. |
-| `plugins/error-hook` | Zapisuje błędy narzędzi do JSONL (`~/mempalace/audit/`). |
-| `plugins/danger-guard` | Zanim komenda powłoki (także z Code Mode) się wykona, blokuje groźne i wychodzące polecenia: `rm -rf` na `~` i `/`, `dd`/`mkfs` na dysk, `curl \| bash`, dostęp do kluczy SSH, `git push`, `gh … create`, publikację paczek i wysyłkę plików na obcy host. Zamiast tego model podaje komendę do ręcznego uruchomienia. Sprawdza też treść skryptu uruchamianego z komendy (jeden poziom). Chroni przed przypadkowymi wpadkami, nie przed celowym obejściem. Wzorce częściowo z Goose. Wyłączenie: `DANGER_GUARD=off`. |
-| `plugins/fake-call-scrub` | Usuwa z historii rozmowy wywołania narzędzi wpisane tekstem (`<shell>…</shell>`, `<tool_call>{…}</tool_call>`), żeby model ich nie kopiował. Dla wybranych agentów wymusza prawdziwe wywołanie na starcie tury (`tool_choice=required`). Dla Gemmy 4 usuwa tekst obok `tool_calls`, bo przez niego szablon czatu zamyka turę. Wyłączenie: `FAKE_CALL_SCRUB=off`. |
-| `plugins/site-lint-hook` + `bin/site-lint` | Po każdym zapisie `.html/.css/.js` uruchamia `site-lint` (statyczna strona bez sieci: klasy bez reguły CSS, martwe linki i kotwice, `alt`, `label`, niezbalansowane tagi, JSON-LD) i dokleja błędy do wyniku narzędzia. Milczy w projektach z `package.json`. Wyłączenie: `SITE_LINT_HOOK=off`. |
-| `plugins/test-run-hook` | Po każdym zapisie pliku `.py` uruchamia testy z tego katalogu (`test_*.py` / `*_test.py` z blokiem `__main__`) i dokleja wynik. Milczy w projektach z `pyproject.toml`, `setup.py` albo `pytest.ini`. Wyłączenie: `TEST_RUN_HOOK=off`. |
-| `plugins/work-mode` | Dopisuje do promptu, czy po drugiej stronie jest człowiek: w TUI model podaje opcje i czeka, w `opencode run` sam bierze rekomendowaną opcję. W trybie auto przerywa utknięcie na pytaniu „a czy b?”. Wymuszenie: `FREECODE_MODE=auto\|step`. |
-| `plugins/adversary-guard` | Recenzent wywołań: przed zmianą plików lub komendą pyta ten sam model, czy wywołanie pasuje do zadania, i może je zablokować. Kosztuje jedno zapytanie na wywołanie, dlatego domyślnie działa tylko w bazie treningowej. `ADVERSARY_GUARD=on` włącza go wszędzie. |
-| `plugins/auto-backup` | Przed każdą zmianą plików konfiguracji robi kopię zapasową (cofanie: `bin/backup-copy`). |
-| `bin/lesson-note` | Kopalnia wniosków: `OBJAW / PRZYCZYNA / NAPRAWA / PRZYKŁAD` w plikach i w **osobnym** palace (`~/.mempalace-opencode`). Wnioski modeli nie mieszają się z pamięcią osobistą. Format: `lessons/EXAMPLE.md`. |
-| `bin/agent-rule` | Pozwala modelowi dopisać krótką regułę do bloku `LEARNED` w `AGENTS.md` (limit 10 linii, z kopią). |
-| `bin/freecode-tune` | Strojenie serwera llama.cpp uruchomionego jako usługa systemd `--user`: próba nowych flag, pomiar, a potem zostawienie albo cofnięcie zmiany. |
-| `bin/crop-image` | Wycina fragment obrazka według współrzędnych w procentach, żeby model z obrazami mógł obejrzeć szczegół. |
-| `skills/verify-dont-assume` | Skill dla modelu: sprawdzaj prawdziwy stan zamiast ufać kodowi wyjścia, nazwie narzędzia albo podsumowaniu po kompaktowaniu (kopie i ich kasowanie, flagi bez efektu, ścieżki i ID z podsumowań). Każda reguła pochodzi z prawdziwej wpadki. Instaluje go `install.sh`. |
-| `freecode/freecode` | opencode tylko na lokalnych modelach: konfigurator przy pierwszym starcie, kontrola konfiguracji przed każdym startem (opis niżej). |
-| `freecode/rebrand` | Kopia źródeł opencode z nazwą freecode (`rebrand SOURCE TARGET`; log `TARGET.log.tsv`, podsumowanie `TARGET.summary.md`). Czego nie można zmienić (licencja, domeny, repozytoria, zewnętrzne paczki npm, pliki binarne, logo), zapisuje do logu z plikiem i linią. Dodatkowo spisuje wszystkie adresy sieciowe w kodzie. |
-| `bin/audit-retention` + `systemd/` | Co tydzień przenosi audyt starszy niż 30 dni do archiwum tar. Pliki kasuje dopiero po weryfikacji bajt w bajt. |
+| `plugins/tool-input-fix` | Fixes typical input mistakes of local models before the tool runs: a `</code>` leak from the template, `\"` outside strings, Playwright refs, ms→s. Breaks loops of identical failing calls (`STOP` after 2×). On an error it appends a **KNOWN FIX** from the lesson store. |
+| `plugins/lesson-draft` | After every turn collects tool errors from the event stream. A repeating pattern is saved as a lesson draft for manual review (`~/tmp-opencode/lessons-draft.md`). |
+| `plugins/palace-context` + `bin/palace-context` | Appends up to 3 MemPalace notes for the session directory to the system prompt, only from the wings chosen at install (all by default; similarity threshold 0.57). When embeddings are down it appends a warning instead of silence. |
+| `plugins/auto-thinking` | Dynamic thinking budget for the "auto" variant: new instruction → medium, successful tool → low, errors or `LOOP-STOP` → high (replaces `auto_thinking` with `thinking_budget_tokens` in the request). If it does not apply, the server uses its own limit. |
+| `plugins/no-call-guard` | Detects a turn where the model showed a command with a "result" but never called a tool (a made-up result). Logs only by default; with `NO_CALL_GUARD=act` it appends a note telling the model to run the command or admit it did not. |
+| `plugins/power-cost` | TUI plugin: GPU electricity cost since start. Rate: manual from `POWER_COST_PER_KWH` (+ `POWER_COST_CURRENCY`; the old `POWER_COST_PLN_PER_KWH` works too), otherwise the Eurostat household average (`nrg_pc_204`, 2500–4999 kWh/year, incl. taxes, latest semester) for the country from `POWER_COST_COUNTRY` or `LANG`, in the national currency, cached in `~/.cache/power-cost.json` for 30 days; without network and cache 1.26 zł/kWh; GPU state from `nvidia-smi`. Sidebar section "Power & GPU" (model, watts and peak, load, temperature, fan, VRAM, Wh, cost/h, rate and source), plus a `⚡ cost · W · °C` footer visible with the sidebar hidden. NVIDIA only. |
+| `plugins/error-hook` | Logs tool errors to JSONL (`~/mempalace/audit/`). |
+| `plugins/danger-guard` | Before a shell command (also from Code Mode) runs, blocks dangerous and outbound commands: `rm -rf` on `~` and `/`, `dd`/`mkfs` on a disk, `curl \| bash`, SSH key access, `git push`, `gh … create`, package publishing and file uploads to a foreign host. The model gives the command for the user to "Run MANUALLY" instead. Also checks the content of a script run from the command (one level). Protects against accidents, not deliberate bypasses. Patterns partly from Goose. Off: `DANGER_GUARD=off`. |
+| `plugins/fake-call-scrub` | Removes tool calls written as text (`<shell>…</shell>`, `<tool_call>{…}</tool_call>`) from the chat history so the model does not copy them. For chosen agents forces a real call at the start of a turn (`tool_choice=required`). For Gemma 4 removes text next to `tool_calls`, because it makes the chat template close the turn. Off: `FAKE_CALL_SCRUB=off`. |
+| `plugins/site-lint-hook` + `bin/site-lint` | After every write of `.html/.css/.js` runs `site-lint` (static site, offline: classes without a CSS rule, dead links and anchors, `alt`, `label`, unbalanced tags, JSON-LD) and appends the errors to the tool result. Silent in projects with `package.json`. Off: `SITE_LINT_HOOK=off`. |
+| `plugins/test-run-hook` | After every write of a `.py` file runs the tests in that directory (`test_*.py` / `*_test.py` with a `__main__` block) and appends the result. Silent in projects with `pyproject.toml`, `setup.py` or `pytest.ini`. Off: `TEST_RUN_HOOK=off`. |
+| `plugins/work-mode` | Tells the model whether a human is on the other side: in the TUI it offers options and waits, in `opencode run` it takes the recommended option itself. In auto mode it breaks a stall on an "a or b?" question. Force: `FREECODE_MODE=auto\|step`. |
+| `plugins/adversary-guard` | Call reviewer: before a file change or command it asks the same model whether the call fits the task, and can block it. Costs one request per call, so by default it runs only in the training database. `ADVERSARY_GUARD=on` enables it everywhere. |
+| `plugins/auto-backup` | Backs up config files before every change (undo: `bin/backup-copy`). |
+| `bin/lesson-note` | Lesson store: `SYMPTOM / CAUSE / FIX / EXAMPLE` in files and in a **separate** palace (`~/.mempalace-opencode`), so model lessons never mix with personal memory. Older files with Polish field names are still read. Format: `lessons/EXAMPLE.md`. |
+| `bin/agent-rule` | Lets the model add a short rule to the `LEARNED` block in `AGENTS.md` (10-line limit, with a backup). |
+| `bin/freecode-tune` | Tunes a llama.cpp server run as a systemd `--user` service: try new flags, measure, then keep or roll back. |
+| `bin/crop-image` | Crops an image by percentage coordinates so a vision model can look at a detail. |
+| `skills/verify-dont-assume` | Skill for the model: check the real state instead of trusting an exit code, a tool name or a post-compaction summary (backups and deleting them, flags with no effect, paths and IDs from summaries). Every rule comes from a real mishap. Installed by `install.sh`. |
+| `freecode/freecode` | opencode on local models only: first-run setup wizard and a config check before every start (see below). |
+| `freecode/rebrand` | Copies the opencode sources under the freecode name (`rebrand SOURCE TARGET`; log `TARGET.log.tsv`, summary `TARGET.summary.md`). What must not change (license, domains, repositories, external npm packages, binaries, logo) is logged with file and line. Also lists every network address in the code. |
+| `bin/audit-retention` + `systemd/` | Weekly moves audit logs older than 30 days into a tar archive. Deletes files only after a byte-for-byte check. |
 
-## Start od zera (`bootstrap.sh`)
+## Start from zero (`bootstrap.sh`)
 
-Na czystym systemie jedna komenda stawia wszystko: llama.cpp, model z Hugging Face, opencode, wtyczki i freecode.
+On a clean system one command sets up everything: llama.cpp, a model from Hugging Face, opencode, the plugins and freecode.
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/SyriusM/opencode-config/main/bootstrap.sh | bash
-./bootstrap.sh --dry-run   # z klonu repo: tylko pokaże wykryty sprzęt i plan
+./bootstrap.sh --dry-run   # from a repo clone: only show the detected hardware and the plan
 ```
 
-Skrypt rozpoznaje GPU, VRAM, RAM i sterownik, a potem dobiera:
+The script detects the GPU, VRAM, RAM and driver, then picks:
 
-| Sprzęt | llama.cpp | Model |
+| Hardware | llama.cpp | Model |
 |---|---|---|
-| NVIDIA, sterownik ≥ 580 / ≥ 570 | CUDA 13 / CUDA 12 (gotowe wydanie razem z bibliotekami CUDA) | |
-| AMD, Intel (z Vulkanem) | Vulkan | |
-| bez GPU | CPU | |
-| RAM ≥ 28 GiB albo VRAM ≥ 22 GiB | | Qwen3.6-35B-A3B IQ4_NL (~18 GB; MoE: eksperci w RAM, reszta + cache ekspertów na GPU) |
-| RAM ≥ 14 GiB albo VRAM ≥ 8 GiB | | Qwen3.5-9B Q4_K_XL (~6 GB) |
-| mniej | | Qwen3-4B Instruct (~3 GB, słaby do narzędzi) |
+| NVIDIA, driver ≥ 580 / ≥ 570 | CUDA 13 / CUDA 12 (ready release bundled with the CUDA libraries) | |
+| AMD, Intel (with Vulkan) | Vulkan | |
+| no GPU | CPU | |
+| RAM ≥ 28 GiB or VRAM ≥ 22 GiB | | Qwen3.6-35B-A3B IQ4_NL (~18 GB; MoE: experts in RAM, the rest + an expert cache on the GPU) |
+| RAM ≥ 14 GiB or VRAM ≥ 8 GiB | | Qwen3.5-9B Q4_K_XL (~6 GB) |
+| less | | Qwen3-4B Instruct (~3 GB, weak with tools) |
 
-**Minimalne wymagania** (lokalny model; poniżej tego bootstrap odmawia i proponuje `--url` z serwerem na innym komputerze):
+**Minimum requirements** (local model; below this bootstrap refuses and suggests `--url` with a server on another computer):
 
-| | Minimum | Lepiej |
+| | Minimum | Better |
 |---|---|---|
-| System | Linux x86_64 (gotowe wydania llama.cpp), Python ≥ 3.10, Node ≥ 20, git, curl | systemd --user (start na żądanie) |
-| Pamięć | 8 GB RAM albo 6 GB VRAM — model 4B, słaby do pracy z narzędziami | 16 GB RAM → 9B; 32 GB RAM (albo 24 GB VRAM) → 35B |
-| Procesor | x86_64; bez AVX2 działa, ale kilkukrotnie wolniej | AVX2, ≥ 6 rdzeni |
-| Karta | niepotrzebna (samo CPU) | NVIDIA ze sterownikiem ≥ 570 (CUDA); AMD/Intel przez Vulkan — kalibracja sprawdza, czy w ogóle szybsza od CPU |
-| Dysk | ~6 GB (4B), ~9 GB (9B), ~21 GB (35B) | NVMe (szybsze wczytywanie modelu) |
+| System | Linux x86_64 (ready llama.cpp releases), Python ≥ 3.10, Node ≥ 20, git, curl | systemd --user (start on demand) |
+| Memory | 8 GB RAM or 6 GB VRAM — 4B model, weak with tools | 16 GB RAM → 9B; 32 GB RAM (or 24 GB VRAM) → 35B |
+| CPU | x86_64; works without AVX2, but several times slower | AVX2, ≥ 6 cores |
+| GPU | not needed (CPU only) | NVIDIA with driver ≥ 570 (CUDA); AMD/Intel via Vulkan — calibration checks whether it beats the CPU at all |
+| Disk | ~6 GB (4B), ~9 GB (9B), ~21 GB (35B) | NVMe (faster model loading) |
 
-Minimum jest wyliczone z rozmiaru modelu i okna, **nie zmierzone na słabym sprzęcie**. Słabsze komputery (mniej RAM, ARM) to osobny temat: mniejsze modele albo serwer w LAN.
+The minimum is computed from the model and window size, **not measured on weak hardware**. Weaker machines (less RAM, ARM) are a separate topic: smaller models or a server on the LAN.
 
-**Sprawdzony jest tylko zestaw RTX 3080 10 GB + 32 GB RAM** (35B, ~118 tok/s w czacie). Przy innym sprzęcie skrypt mówi to wprost, a rozkład warstw między GPU i RAM zostawia `--fit` llama.cpp. Build llama.cpp jest przypięty (`LLAMA_TAG` w skrypcie), bo nocne wydania zmieniają ustawienia domyślne.
+**Only the RTX 3080 10 GB + 32 GB RAM setup is verified** (35B, ~118 tok/s chat). On other hardware the script says so plainly and leaves the GPU/RAM layer split to llama.cpp `--fit`. The llama.cpp build is pinned (`LLAMA_TAG` in the script), because nightly releases change defaults.
 
-Model startuje **na żądanie**: gniazdo `freecode-llama-proxy.socket` nasłuchuje na porcie, pierwsze zapytanie budzi `freecode-llama.service`, a po 15 min bezczynności serwer sam się wyłącza i zwalnia VRAM oraz RAM (ten sam układ co gniazda-proxy w naszym stacku). Pierwsze zapytanie po przerwie czeka, aż model się wczyta. `--idle N` zmienia czas, `--idle 0` = serwer działa stale. Wyłączenie na stałe: `systemctl --user disable --now freecode-llama-proxy.socket freecode-llama.service`; włączenie z powrotem: `systemctl --user enable --now freecode-llama-proxy.socket`. Pliki trafiają do `~/.local/share/freecode/` (`llama.cpp/`, `models/`). Na koniec skrypt robi próbę z narzędziem: model ma odczytać plik z losowym tekstem. Opcje: `--profile 35b|9b|4b`, `--backend cuda-13|cuda-12|vulkan|cpu`, `--llama-tag`, `--port`, `--url … --model …` (własny serwer), `--idle N`, `--no-smoke`.
+The model starts **on demand**: the `freecode-llama-proxy.socket` socket listens on the port, the first request wakes `freecode-llama.service`, and after 15 min idle the server stops itself and frees VRAM and RAM. The first request after a pause waits until the model loads. `--idle N` changes the time, `--idle 0` = always on. Disable for good: `systemctl --user disable --now freecode-llama-proxy.socket freecode-llama.service`; enable again: `systemctl --user enable --now freecode-llama-proxy.socket`. Files go to `~/.local/share/freecode/` (`llama.cpp/`, `models/`). At the end the script runs a tool test: the model has to read a file with random text. Options: `--profile 35b|9b|4b`, `--backend cuda-13|cuda-12|vulkan|cpu`, `--llama-tag`, `--port`, `--url … --model …` (your own server), `--idle N`, `--no-smoke`.
 
-**Kalibracja (Vulkan).** Vulkan widzi naraz każdą kartę, także grafikę w procesorze, a słaba zintegrowana bywa wolniejsza od samego CPU (Radeon 610M: 35B 8,7 tok/s, CPU 15,5). Dlatego po pobraniu modelu bootstrap mierzy `llama-bench` każdą kartę i samo CPU i bierze najszybsze. Do tego mierzy czas czekania na pamięć (PSI), bo przy braku RAM wynik mierzy swap, a nie kartę. Raport trafia do `~/.local/share/freecode/tune-report.json`.
+**Calibration (Vulkan).** Vulkan sees every card at once, including CPU graphics, and a weak integrated GPU can be slower than the CPU alone (Radeon 610M: 35B 8.7 tok/s, CPU 15.5). So after the model download bootstrap measures each card and the CPU alone with `llama-bench` and takes the fastest. It also measures time spent waiting for memory (PSI), because with too little RAM the result measures swap, not the card. The report goes to `~/.local/share/freecode/tune-report.json`.
 
-**Strojenie: `freecode-tune` + skill `freecode-tune`.** Po instalacji można poprosić model w freecode: „dostrój model”. Model wybiera zmianę flagi z białej listy (`ctx`, `moe-cache`, `n-cpu-moe`, `spec`, `threads`, `ubatch`, `batch`, `cache-ram`, każda w zakresie), a `~/bin/freecode-tune try KLUCZ=WARTOŚĆ` restartuje serwer i mierzy czat, przepisywanie kodu i długi prompt (~60% okna). Zmiana zostaje tylko wtedy, gdy wynik rośnie o ≥ 3% (albo większy kontekst traci ≤ 3%), a inaczej wraca. Model proponuje, skrypt rozstrzyga. Zmiany siedzą w drop-inie `freecode-llama.service.d/tune.conf`, a `freecode-tune rollback` przywraca ustawienia z bootstrapu. Ręcznie: `freecode-tune status`, `freecode-tune bench`. Własne usługi z llama-server też: `freecode-tune units`, potem `-u NAZWA` (zmiany idą do `NAZWA.service.d/tune.conf`). Gdy usługa ma `--mmproj`, pomiar wysyła też obrazek — zmiana, po której serwer pada na obrazku, wraca. Uwaga: `tune.conf` ma całą linię startu, więc ręczna zmiana flag w unicie po strojeniu nie zadziała — `freecode-tune status` to pokaże, a `freecode-tune rebase` przeniesie strojenie na nowe flagi.
+**Tuning: `freecode-tune` + the `freecode-tune` skill.** After install you can ask the model in freecode: "tune the model". The model picks an allow-listed flag change (`ctx`, `moe-cache`, `n-cpu-moe`, `spec`, `threads`, `ubatch`, `batch`, `cache-ram`, each within a range), and `~/bin/freecode-tune try KEY=VALUE` restarts the server and measures chat, code rewriting and a long prompt (~60% of the window). The change stays only if the score rises by ≥ 3% (or a bigger context loses ≤ 3%); otherwise it is rolled back. The model proposes, the script decides. Changes live in the `freecode-llama.service.d/tune.conf` drop-in, and `freecode-tune rollback` restores the bootstrap settings. By hand: `freecode-tune status`, `freecode-tune bench`. Your own llama-server services work too: `freecode-tune units`, then `-u NAME` (changes go to `NAME.service.d/tune.conf`). When the service has `--mmproj`, the measurement also sends an image — a change that makes the server fail on an image is rolled back. Note: `tune.conf` holds the whole start line, so editing flags in the unit by hand after tuning has no effect — `freecode-tune status` shows this, and `freecode-tune rebase` moves the tuning onto the new flags.
 
-## Instalacja
+## Install
 
-Wymagania: Linux, Python ≥ 3.10, opencode 2.x (`npm i -g @opencode/cli`), lokalny serwer modeli z API zgodnym z OpenAI (llama.cpp, Ollama, vLLM…).
+Requirements: Linux, Python ≥ 3.10, opencode 2.x (`npm i -g @opencode/cli`), a local model server with an OpenAI-compatible API (llama.cpp, Ollama, vLLM…).
 
 ```sh
 git clone https://github.com/SyriusM/opencode-config && cd opencode-config
-./install.sh          # pyta o MemPalace, port embeddingów i skrzydła; -y = wartości domyślne
-./install.sh --check  # autotest istniejącej instalacji
+./install.sh          # asks about MemPalace, the embedding port and wings; -y = defaults
+./install.sh --check  # self-test of an existing installation
 ./install.sh --uninstall
 ```
 
-Co robi instalator:
+What the installer does:
 
-1. Szuka MemPalace (`$MEMPALACE_PYTHON`, `~/mempalace/.venv`, potem systemowy `python3`). Jeśli go nie ma, proponuje venv w `~/.local/share/opencode-config/venv` i instalację z PyPI. Pyta o port serwera embeddingów do kontroli zdrowia: `0` = wbudowane w MemPalace, bez serwera (domyślnie), `8080` = llama.cpp, `11434` = Ollama.
-2. Szuka serwera modeli na `127.0.0.1:8080` (llama.cpp) i `127.0.0.1:11434` (Ollama). Jeśli znajdzie, a nie masz jeszcze `~/.config/opencode/opencode.json`, proponuje jego zapis z pierwszym modelem z listy (z `enabled_providers` i lokalnym `small_model`). Istniejącego pliku nie rusza.
-3. Kopiuje wtyczki do `~/.config/opencode/plugins/` (opencode wczytuje je stamtąd sam, nie trzeba ich wpisywać do `opencode.json`), skrypty do `~/bin/`, a ustawienia zapisuje w `~/.config/opencode-config/config`. Nadpisywane pliki dostają kopię `.bak-…`.
-4. Włącza timer `audit-retention` (systemd `--user`, jeśli jest) i uruchamia autotest.
+1. Looks for MemPalace (`$MEMPALACE_PYTHON`, `~/mempalace/.venv`, then the system `python3`). If missing, offers a venv in `~/.local/share/opencode-config/venv` and an install from PyPI. Asks for the embedding server port for the health check: `0` = built into MemPalace, no server (default), `8080` = llama.cpp, `11434` = Ollama.
+2. Looks for a model server on `127.0.0.1:8080` (llama.cpp) and `127.0.0.1:11434` (Ollama). If found and you have no `~/.config/opencode/opencode.json` yet, offers to write one with the first model from the list (with `enabled_providers` and a local `small_model`). An existing file is never touched.
+3. Copies the plugins to `~/.config/opencode/plugins/` (opencode loads them from there by itself, no need to list them in `opencode.json`), scripts to `~/bin/`, and saves the settings in `~/.config/opencode-config/config`. Overwritten files get a `.bak-…` backup.
+4. Enables the `audit-retention` timer (systemd `--user`, if available) and runs the self-test.
 
-`~/bin` powinien być w `PATH`, bo model wywołuje `lesson-note` i `agent-rule` przez powłokę. Instalator ostrzega, jeśli nie jest.
+`~/bin` should be in `PATH`, because the model calls `lesson-note` and `agent-rule` through the shell. The installer warns if it is not.
 
-## freecode: opencode tylko na lokalnych modelach
+## freecode: opencode on local models only
 
-opencode 2.x bez poprawnej konfiguracji po cichu wysyła rozmowę do darmowych modeli w chmurze. Sprawdzone w kontenerze z 2.0.24:
+Without a correct configuration opencode 2.x silently sends the conversation to free cloud models. Verified in a container with 2.0.24:
 
-| Sytuacja | Dokąd idzie prompt |
+| Situation | Where the prompt goes |
 |---|---|
-| brak `opencode.json` | chmura (`opencode/fledge-alpha-free`) |
-| uszkodzony JSON | chmura (`exo-free`), bez komunikatu o błędzie |
-| `enabled_providers` bez `small_model` | rozmowa lokalnie, **tytuły sesji do chmury** |
-| `enabled_providers` + lokalny `small_model` | wszystko lokalnie |
+| no `opencode.json` | cloud (`opencode/fledge-alpha-free`) |
+| broken JSON | cloud (`exo-free`), no error message |
+| `enabled_providers` without `small_model` | chat local, **session titles to the cloud** |
+| `enabled_providers` + local `small_model` | everything local |
 
-Do tego usługa w tle (`opencode serve --service`) trzyma konfigurację z chwili swojego startu, więc poprawka pliku nie działa od razu.
+On top of that the background service (`opencode serve --service`) keeps the configuration from its start, so fixing the file does not take effect right away.
 
-`freecode` to **nakładka, nie fork**. opencode instalujesz i aktualizujesz normalnie (`npm i -g @opencode/cli`), a freecode przy każdym starcie pilnuje, żeby działał tylko na lokalnych modelach. `freecode --version` pokazuje obie wersje, np. `freecode 0.1 — nakładka na opencode 2.0.24, tylko lokalne modele`. Po aktualizacji opencode zmień wersję w `.github/workflows/test.yml`, a test pokaże, czy nakładka dalej działa.
+`freecode` is **a wrapper, not a fork**. You install and update opencode normally (`npm i -g @opencode/cli`), and freecode makes sure at every start that it only runs on local models. `freecode --version` shows both versions, e.g. `freecode 0.1 — a wrapper around opencode 2.0.24, local models only`. After an opencode update change the version in `.github/workflows/test.yml`, and the test shows whether the wrapper still works.
 
-Co robi:
+What it does:
 
-- **przy pierwszym starcie** odpala konfigurator. Ten wykrywa lokalny serwer (llama.cpp :8080, Ollama :11434, LM Studio :1234, vLLM :8000) i zapisuje bezpieczny `opencode.json`. Do istniejącego pliku proponuje dopisać `enabled_providers` i `small_model`, z kopią zapasową. Nowy plik dostaje też 4 agentów (general, coder, reasoner, reviewer) z promptami z `agents/` i rozmiar kontekstu odczytany z serwera. Ponowne uruchomienie: `freecode --configure`;
-- **`freecode --configure`** działa w 4 osobnych etapach, każda zmiana z pytaniem:
-  1. połączenie z lokalnym modelem (`opencode.json`);
-  2. zgodność ze wzorcem z `agents/` (kontekst modelu względem serwera, `small_model`, brakujący agenci, brakujące sekcje `AGENTS.md`);
-  3. styl pracy modelu (a/b/c: opcje przed zadaniem, opis kroków, swoboda zmian, język), zapisywany w bloku `PREFS` w `AGENTS.md`;
-  4. opis komputera (blok `ENV`).
-  `--configure 3` uruchamia tylko wybrany etap. Bootstrap robi etap 1 przed instalacją, a 2–4 po niej. Stara nazwa `--optimize` działa dalej;
-- **`freecode --set narration=b`** zmienia styl pracy bez pytań. Model używa tego po złej ocenie pracy, ale tylko po Twojej zgodzie. **`freecode --undo`** cofa ostatnią zmianę (historia w `~/.local/share/freecode/prefs-history.jsonl`);
-- **tryb pracy** (wtyczka `work-mode`): w `opencode run` / `--auto` nikt nie odpowie, więc model sam bierze rekomendowaną opcję i mówi, którą; w TUI podaje opcje i czeka. Wymuszenie: `FREECODE_MODE=auto|step`;
-- **opisuje komputer w `AGENTS.md`** (blok `ENV`: system, menedżer pakietów, GPU i VRAM, RAM, model i kontekst), odświeżany co dobę albo ręcznie `freecode --env` — model nie musi pytać o podstawy. Reszty pliku nie rusza; własnych `AGENTS.md` i promptów `install.sh` nie nadpisuje;
-- **przy każdym starcie** sprawdza wszystkie źródła konfiguracji: globalne, `$OPENCODE_CONFIG`, `$OPENCODE_CONFIG_CONTENT` i pliki projektu aż do korzenia repozytorium. Odmawia startu, jeśli JSON jest uszkodzony albo którykolwiek model czy dostawca nie jest lokalny (localhost, 127.0.0.0/8, ::1, hosty z `FREECODE_HOSTS`). To samo dotyczy innych dróg wyjścia treści sesji: `share: "auto"`, `enterprise.url`, włączonego zdalnego serwera MCP (`type: remote`) i adresu nadpisanego w `provider.X.api` albo na poziomie modelu. Nie przekazuje też do opencode poleceń, które wychodzą do sieci albo wystawiają serwer (`upgrade`, `auth`, `uninstall`, `plugin add/check/update`, `mcp auth`, `pair --remote`, nielokalne `--server`, `session import URL`). Po zmianie konfiguracji usługa w tle dostaje `opencode reload` zamiast restartu, więc otwarte sesje zostają;
-- uruchamia opencode z `--standalone`, czyli z własnym serwerem z właśnie sprawdzoną konfiguracją, oraz z `OPENCODE_DISABLE_AUTOUPDATE` i `OPENCODE_DISABLE_MODELS_FETCH`.
+- **on first start** it runs the setup wizard. It detects a local server (llama.cpp :8080, Ollama :11434, LM Studio :1234, vLLM :8000) and writes a safe `opencode.json`. For an existing file it offers to add `enabled_providers` and `small_model`, with a backup. A new file also gets 4 agents (general, coder, reasoner, reviewer) with prompts from `agents/` and the context size read from the server. Run again: `freecode --configure`;
+- **`freecode --configure`** runs in 4 separate stages, every change asks first:
+  1. connection to the local model (`opencode.json`);
+  2. conformity with the `agents/` template (model context vs. server, `small_model`, missing agents, missing `AGENTS.md` sections);
+  3. the model's work style (a/b/c: options before a task, step narration, freedom to change, language), saved in the `PREFS` block of `AGENTS.md`;
+  4. computer description (the `ENV` block).
+  `--configure 3` runs only the chosen stage. Bootstrap runs stage 1 before the install and 2–4 after it. The old name `--optimize` still works;
+- **`freecode --set narration=b`** changes the work style without questions. The model uses it after a bad rating of its work, but only with your consent. **`freecode --undo`** reverts the last change (history in `~/.local/share/freecode/prefs-history.jsonl`);
+- **work mode** (`work-mode` plugin): in `opencode run` / `--auto` nobody will answer, so the model takes the recommended option itself and says which; in the TUI it offers options and waits. Force: `FREECODE_MODE=auto|step`;
+- **describes the computer in `AGENTS.md`** (the `ENV` block: system, package manager, GPU and VRAM, RAM, model and context), refreshed daily or by hand with `freecode --env` — the model does not have to ask about the basics. The rest of the file is untouched; `install.sh` never overwrites your own `AGENTS.md` and prompts;
+- **at every start** it checks all configuration sources: global, `$OPENCODE_CONFIG`, `$OPENCODE_CONFIG_CONTENT` and project files up to the repository root. It refuses to start if the JSON is broken or any model or provider is not local (localhost, 127.0.0.0/8, ::1, hosts from `FREECODE_HOSTS`). The same goes for other ways session content can leave: `share: "auto"`, `enterprise.url`, an enabled remote MCP server (`type: remote`) and an address overridden in `provider.X.api` or at model level. It also does not pass to opencode commands that go to the network or expose the server (`upgrade`, `auth`, `uninstall`, `plugin add/check/update`, `mcp auth`, `pair --remote`, non-local `--server`, `session import URL`). After a configuration change the background service gets `opencode reload` instead of a restart, so open sessions stay;
+- runs opencode with `--standalone`, i.e. its own server with the configuration just checked, plus `OPENCODE_DISABLE_AUTOUPDATE` and `OPENCODE_DISABLE_MODELS_FETCH`.
 
 ```sh
 freecode                 # TUI
-freecode run "pytanie"   # jednorazowo
-freecode --check         # tylko kontrola
+freecode run "question"  # one-shot
+freecode --check         # check only
 ```
 
-Ograniczenie: freecode nie blokuje sieci. Narzędzia `webfetch`/`websearch` i serwery MCP nadal mogą łączyć się z internetem, a pilnowana jest tylko wysyłka promptów do modeli.
+Limitation: freecode does not block the network. The `webfetch`/`websearch` tools and MCP servers can still reach the internet; only sending prompts to models is guarded.
 
-## Model: przykładowy `opencode.json`
+## Model: example `opencode.json`
 
-Gdy instalator nie wykrył serwera albo masz model na innym porcie, zapisz `~/.config/opencode/opencode.json` ręcznie:
+If the installer found no server, or your model is on another port, write `~/.config/opencode/opencode.json` by hand:
 
 ```json
 {
@@ -147,89 +147,89 @@ Gdy instalator nie wykrył serwera albo masz model na innym porcie, zapisz `~/.c
     "local": {
       "npm": "@ai-sdk/openai-compatible",
       "options": { "baseURL": "http://127.0.0.1:8080/v1" },
-      "models": { "qwen3-8b": { "name": "Qwen3 8B (lokalnie)" } }
+      "models": { "qwen3-8b": { "name": "Qwen3 8B (local)" } }
     }
   }
 }
 ```
 
-`enabled_providers` i `small_model` są obowiązkowe, bo bez nich opencode korzysta z chmury (patrz freecode). Nazwa modelu (`qwen3-8b`) musi się zgadzać z tym, co serwer zwraca pod `/v1/models`. Model musi umieć wywoływać narzędzia. Dla llama.cpp oznacza to uruchomienie `llama-server` z `--jinja`.
+`enabled_providers` and `small_model` are mandatory, because without them opencode uses the cloud (see freecode). The model name (`qwen3-8b`) must match what the server returns at `/v1/models`. The model must support tool calls. For llama.cpp that means running `llama-server` with `--jinja`.
 
-## `AGENTS.md` (opcjonalnie)
+## `AGENTS.md` (optional)
 
-Wtyczki działają bez tego pliku. Żeby model sam zapisywał wnioski i reguły, dopisz do `~/.config/opencode/AGENTS.md`:
+The plugins work without this file. For the model to save lessons and rules by itself, add to `~/.config/opencode/AGENTS.md`:
 
 ```markdown
-## Błędy narzędzi
-Zanim zaczniesz szukać przyczyny błędu narzędzia, sprawdź `~/bin/lesson-note search "komunikat"`.
-Gdy rozwiążesz nowy błąd, zapisz wniosek: `~/bin/lesson-note add "OBJAW" "PRZYCZYNA" "NAPRAWA" "PRZYKŁAD"`.
+## Tool errors
+Before looking for the cause of a tool error, check `~/bin/lesson-note search "message"`.
+When you solve a new error, save a lesson: `~/bin/lesson-note add "SYMPTOM" "CAUSE" "FIX" "EXAMPLE"`.
 
-## Reguły wyuczone
-Jedyne miejsce, w którym możesz sam dopisać regułę, i tylko poleceniem `~/bin/agent-rule add "co robić + przykład"`.
+## Learned rules
+The only place where you may add a rule yourself, and only with `~/bin/agent-rule add "what to do + example"`.
 <!-- LEARNED:START -->
 <!-- LEARNED:END -->
 ```
 
-Bez znaczników `LEARNED` polecenie `agent-rule` odmawia zapisu. Starsze nazwy (`WYUCZONE`, `dodaj`, `szukaj`, `--sprawdz`, `FREECODE_HOSTY`) nadal działają.
+Without the `LEARNED` markers `agent-rule` refuses to write. Older names (`WYUCZONE`, `dodaj`, `szukaj`, `--sprawdz`, `FREECODE_HOSTY`) still work.
 
-## Gdzie co ląduje
+## Where things go
 
-| Ścieżka | Zawartość |
+| Path | Content |
 |---|---|
-| `~/.mempalace/hook_state/*.log` | logi wtyczek (pierwsze miejsce do sprawdzenia, gdy coś nie działa) |
-| `~/mempalace/audit/errors_RRRRMMDD.jsonl` | błędy narzędzi (`error-hook`) |
-| `~/tmp-opencode/lessons-draft.md` | szkice lekcji (`lesson-draft`, gdy ten sam błąd powtórzy się ≥ 2× w turze) |
-| `~/oc-audyt/kopalnia/`, `~/.mempalace-opencode` | kopalnia wniosków |
-| `~/oc-audyt/auto-kopie/` | kopie plików konfiguracji |
+| `~/.mempalace/hook_state/*.log` | plugin logs (first place to look when something does not work) |
+| `~/mempalace/audit/errors_YYYYMMDD.jsonl` | tool errors (`error-hook`) |
+| `~/tmp-opencode/lessons-draft.md` | lesson drafts (`lesson-draft`, when the same error repeats ≥ 2× in a turn) |
+| `~/oc-audyt/kopalnia/`, `~/.mempalace-opencode` | lesson store |
+| `~/oc-audyt/auto-kopie/` | config file backups |
 
-Deinstalacja usuwa tylko zainstalowane pliki. Dane z tabeli, ustawienia i venv zostają, usuń je ręcznie.
+Uninstall removes only the installed files. The data in the table, the settings and the venv stay; remove them by hand.
 
-## Testy
+## Tests
 
-Przetestowane w czystym kontenerze Arch Linux z opencode 2.0.24: instalacja, autotest, deinstalacja oraz pełna sesja `opencode run` na atrapie serwera OpenAI. W tej sesji wszystkie wtyczki się ładują, `error-hook` i `lesson-draft` zapisują błędy narzędzia, a `palace-context` dokleja notatkę do promptu systemowego.
+Tested in a clean Arch Linux container with opencode 2.0.24: install, self-test, uninstall and a full `opencode run` session against a mock OpenAI server. In that session all plugins load, `error-hook` and `lesson-draft` record the tool errors, and `palace-context` appends a note to the system prompt.
 
-Ten sam test uruchamia GitHub Actions przy każdym pushu (`.github/workflows/test.yml`: shellcheck, składnia wtyczek przez esbuild, `tests/e2e.sh`). Lokalnie tylko w kontenerze, bo test instaluje wszystko od zera:
+GitHub Actions runs the same test on every push (`.github/workflows/test.yml`: shellcheck, plugin syntax via esbuild, `tests/e2e.sh`). Locally only in a container, because the test installs everything from scratch:
 
 ```sh
 docker run --rm -v "$PWD":/repo:ro archlinux bash -c 'pacman -Syu --noconfirm --needed nodejs npm python curl diffutils >/dev/null && npm i -g --ignore-scripts=false @opencode/cli@2.0.24 >/dev/null && (cd "$(npm root -g)/@opencode/cli" && node postinstall.mjs) && cp -r /repo /tmp/oc && /tmp/oc/tests/e2e.sh'
 ```
 
-Testy zachowania wtyczek (`tool-input-fix`, `no-call-guard`) nie potrzebują kontenera ani opencode, tylko Node 22:
+Plugin behaviour tests (`tool-input-fix`, `no-call-guard` and others) need neither a container nor opencode, only Node 22:
 
 ```sh
-tests/plugins/run.sh              # wtyczki z repo
-tests/plugins/run.sh ~/.config/opencode/plugins   # wtyczki zainstalowane
+tests/plugins/run.sh              # plugins from the repo
+tests/plugins/run.sh ~/.config/opencode/plugins   # installed plugins
 ```
 
-Każdy test działa na sztucznym katalogu domowym w `/tmp`. Sprawdzają m.in. 92 przypadki poprawek i wskazówek (`tests/plugins/cases.json`, `@HOME@` = katalog domowy), treść wskazówek o zgadywanych ścieżkach, hamulec pętli z eskalacją, STOP przy powtarzanym „No changes to apply”, dostarczanie wskazówek dla read/edit/write w wyniku wywołania i wskazówkę „najpierw wczytaj plik”. Wskazówki dla `ls`/`cat`/`find`/`cp` rozpoznają ścieżki bezwzględne tylko w postaci `/home/<user>/…`, dlatego te przypadki są zapisane jako `~/…`.
+Every test runs on a fake home directory in `/tmp`. They cover, among others, 95 fix and hint cases (`tests/plugins/cases.json`, `@HOME@` = home directory), hint text for guessed paths, the loop brake with escalation, STOP on a repeated "No changes to apply", delivering hints for read/edit/write in the call result, and the "read the file first" hint. Hints for `ls`/`cat`/`find`/`cp` recognise absolute paths only as `/home/<user>/…`, so those cases are written as `~/…`. Some test inputs are deliberately Polish: the plugins also understand Polish user messages and Polish-locale shell errors.
 
-## API wtyczek opencode 2.0.24 (zmierzone, nie z dokumentacji)
+## opencode 2.0.24 plugin API (measured, not from docs)
 
-- Moduł: `export default { id, async setup(ctx) { … } }`. Wtyczka dostaje osobną instancję dla każdej lokalizacji, a strumień zdarzeń jest wspólny, więc trzeba deduplikować po `event.id`.
-- `ctx` ma m.in. `location`, `session`, `tool`, `event`, `mcp`, `storage`. **Nie ma `ctx.client`.**
-- Katalog sesji: `ctx.location.directory`. `process.cwd()` to katalog startu serwera.
-- Prompt systemowy: `ctx.session.hook("context", async (p) => p.system.push({type: "text", text}))`. Pola `p`: `sessionID, model, system, messages, options, agent, tools`.
-- Narzędzia: `ctx.tool.hook("execute.before" | "execute.after", cb)`. Wejście zmienia się przez `ev.input = …`.
-- Zdarzenia: `ctx.event.subscribe()`. **`session.idle` nie istnieje.**
-  - Koniec tury to `session.execution.succeeded|failed`.
-  - `sessionID` jest w `event.data.sessionID`.
-  - Błąd narzędzia to `session.tool.failed` (`data.error.message`, `data.id`).
-  - Nazwa narzędzia jest w `session.tool.input.started` (`data.name`), a nie w `session.tool.called`.
+- Module: `export default { id, async setup(ctx) { … } }`. A plugin gets a separate instance per location, but the event stream is shared, so deduplicate by `event.id`.
+- `ctx` has `location`, `session`, `tool`, `event`, `mcp`, `storage` among others. **There is no `ctx.client`.**
+- Session directory: `ctx.location.directory`. `process.cwd()` is the server's start directory.
+- System prompt: `ctx.session.hook("context", async (p) => p.system.push({type: "text", text}))`. Fields of `p`: `sessionID, model, system, messages, options, agent, tools`.
+- Tools: `ctx.tool.hook("execute.before" | "execute.after", cb)`. Change the input with `ev.input = …`.
+- Events: `ctx.event.subscribe()`. **`session.idle` does not exist.**
+  - End of turn is `session.execution.succeeded|failed`.
+  - `sessionID` is in `event.data.sessionID`.
+  - A tool error is `session.tool.failed` (`data.error.message`, `data.id`).
+  - The tool name is in `session.tool.input.started` (`data.name`), not in `session.tool.called`.
 
-## Podziękowania
+## Thanks
 
-To repozytorium to tylko cienka warstwa na pracy wielu ludzi, którzy oddali ją za darmo. Bez nich nic z tego by nie działało.
+This repository is only a thin layer on the work of many people who gave it away for free. None of it would work without them.
 
-- **Linus Torvalds** i społeczność [Linuksa](https://kernel.org), **GNU**, **systemd**, [Arch Linux](https://archlinux.org) i [CachyOS](https://cachyos.org) — system, na którym to wszystko stoi.
-- **Georgi Gerganov** i współtwórcy [llama.cpp](https://github.com/ggml-org/llama.cpp) — serwer, który uruchamia modele na zwykłej karcie.
-- **Iwan Kawrakow** — autor kwantyzacji k-quants i i-quants w llama.cpp (plik `IQ4_NL`, na którym chodzi tu model 35B, to jego praca) oraz [ik_llama.cpp](https://github.com/ikawrakow/ik_llama.cpp).
-- Zespół **Qwen** (Alibaba), **Google** (Gemma), **BAAI** (bge-m3) — otwarte modele.
-- [unsloth](https://unsloth.ai) — kwantyzacje modeli z zachowaną warstwą MTP.
-- Twórcy [opencode](https://opencode.ai) — harness, który te wtyczki rozszerzają.
-- [MemPalace](https://github.com/MemPalace/mempalace) — pamięć dla modelu.
-- [Anthropic](https://anthropic.com) — Claude pomagał projektować, pisać i mierzyć większość tego kodu.
-- [SyriusM](https://github.com/SyriusM) — sobie, za to, że ta lista mogła powstać.
+- **Linus Torvalds** and the [Linux](https://kernel.org) community, **GNU**, **systemd**, [Arch Linux](https://archlinux.org) and [CachyOS](https://cachyos.org) — the system all of this stands on.
+- **Georgi Gerganov** and the contributors of [llama.cpp](https://github.com/ggml-org/llama.cpp) — the server that runs models on an ordinary GPU.
+- **Iwan Kawrakow** — author of the k-quants and i-quants quantizations in llama.cpp (the `IQ4_NL` file the 35B model runs on here is his work) and of [ik_llama.cpp](https://github.com/ikawrakow/ik_llama.cpp).
+- The **Qwen** team (Alibaba), **Google** (Gemma), **BAAI** (bge-m3) — open models.
+- [unsloth](https://unsloth.ai) — model quantizations with the MTP layer kept.
+- The creators of [opencode](https://opencode.ai) — the harness these plugins extend.
+- [MemPalace](https://github.com/MemPalace/mempalace) — memory for the model.
+- [Anthropic](https://anthropic.com) — Claude helped design, write and measure most of this code.
+- [SyriusM](https://github.com/SyriusM) — to myself, for making this list possible.
 
-## Licencja
+## License
 
 MIT

@@ -30,7 +30,7 @@ const offline = async () => { throw new Error("offline") }
 
 setup({ POWER_COST_PER_KWH: "0.5", POWER_COST_COUNTRY: "DE" }, offline)
 let t = await resolveTariff()
-ok(t.perKwh === 0.5 && t.currency === "€" && t.source === "ręczna", "manual rate, euro country")
+ok(t.perKwh === 0.5 && t.currency === "€" && t.source === "manual", "manual rate, euro country")
 ok(requests.length === 0, "manual rate -> no request")
 
 setup({ POWER_COST_PLN_PER_KWH: "1.1", LANG: "de_DE.UTF-8" }, offline)

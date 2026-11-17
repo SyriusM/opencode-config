@@ -3,13 +3,13 @@ import { homedir } from "node:os"
 import { dirname, isAbsolute, join } from "node:path"
 import { execFileSync } from "node:child_process"
 
-// SITE-LINT-HOOK — po każdym udanym write/edit pliku strony (.html/.htm/.css/.js) uruchamia ~/bin/site-lint
-// na katalogu tego pliku i dokleja ERROR-y do wyniku narzędzia, żeby model je zobaczył bez proszenia.
-// Powód (10-23, trening zadanie 20): Gemma 5/5 razy zostawiła 4–13 klas bez reguły w CSS i niczego nie sprawdziła,
-// także wtedy, gdy AGENTS.md kazał uruchomić site-lint. Qwen sprawdzał sam i przechodził.
-// W trakcie budowy milczy: brak stron HTML w katalogu albo podlinkowany lokalny arkusz CSS jeszcze nie istnieje.
-// Hook V2: ctx.tool.hook("execute.after"), doklejanie jak appendToError w tool-input-fix. Nigdy nie rzuca.
-// Wyłączenie: SITE_LINT_HOOK=off. Log: ~/.mempalace/hook_state/site_lint_hook.log
+// SITE-LINT-HOOK — after every successful write/edit of a site file (.html/.htm/.css/.js) runs ~/bin/site-lint
+// on that file's directory and appends the ERRORs to the tool result, so the model sees them without asking.
+// Reason (10-23, training task 20): Gemma 5/5 times left 4–13 classes without a CSS rule and checked nothing,
+// even when AGENTS.md told it to run site-lint. Qwen checked by itself and passed.
+// While building it stays silent: no HTML pages in the directory, or a linked local CSS file does not exist yet.
+// Hook V2: ctx.tool.hook("execute.after"), appending like appendToError in tool-input-fix. Never throws.
+// Disable: SITE_LINT_HOOK=off. Log: ~/.mempalace/hook_state/site_lint_hook.log
 
 const HOME = homedir()
 const LOG = join(HOME, ".mempalace", "hook_state", "site_lint_hook.log")
@@ -36,7 +36,7 @@ function append(ev: any, text: string): string[] {
   return targets
 }
 
-// strona w trakcie budowy: któraś strona linkuje lokalny CSS, którego jeszcze nie ma
+// site under construction: some page links a local CSS that does not exist yet
 function cssMissing(dir: string, pages: string[]): boolean {
   for (const p of pages) {
     let html = ""
@@ -74,7 +74,7 @@ export default {
         const dir = dirname(fp)
         const pages = readdirSync(dir).filter((f) => /\.html?$/i.test(f))
         if (!pages.length) return
-        // projekt z narzędziem budowania (npm/vite/framework): HTML to szablon, site-lint dałby fałszywe błędy
+        // project with a build tool (npm/vite/framework): the HTML is a template, site-lint would give false errors
         for (let d = dir, i = 0; i < 4; i++, d = dirname(d)) {
           if (existsSync(join(d, "package.json"))) { log(`SKIP build-project ${dir}`); return }
           if (d === dirname(d) || d === HOME) break
@@ -96,15 +96,15 @@ export default {
         if (counts && lastCount.get(key) !== counts) {
           if (lastCount.size > 200) lastCount.clear()
           lastCount.set(key, counts)
-          countText = `\n\nsite-lint: liczba elementów na stronach — ${counts}. Porównaj z tym, czego wymaga zadanie.`
+          countText = `\n\nsite-lint: element counts on the pages — ${counts}. Compare with what the task requires.`
         }
         const errs = out.split("\n").filter((l) => l.startsWith("ERROR "))
         let text = countText
         if (errs.length) {
-          const body = errs.slice(0, MAX_LINES).join("\n") + (errs.length > MAX_LINES ? `\n… i ${errs.length - MAX_LINES} więcej` : "")
+          const body = errs.slice(0, MAX_LINES).join("\n") + (errs.length > MAX_LINES ? `\n… and ${errs.length - MAX_LINES} more` : "")
           text = (last.get(key) === body
-            ? `\n\nsite-lint (automatycznie): te same ${errs.length} błędów nadal są — popraw je, zanim napiszesz, że gotowe.`
-            : `\n\nsite-lint ${dir} (automatycznie po zmianie pliku strony): ${errs.length} błędów. Popraw każdy, zanim napiszesz, że gotowe:\n${body}`) + countText
+            ? `\n\nsite-lint (automatic): the same ${errs.length} errors are still there — fix them before you say it is done.`
+            : `\n\nsite-lint ${dir} (automatic after a site file change): ${errs.length} errors. Fix each one before you say it is done:\n${body}`) + countText
           if (last.size > 200) last.clear()
           last.set(key, body)
         }

@@ -19,18 +19,18 @@ const noChange = (sid, s = "a") => {
 const okEdit = (sid) => hooks["execute.after"]({ tool: "edit", sessionID: sid, input: { filePath: "/tmp/x.py", oldString: "a", newString: "b" }, status: "completed", result: { output: "ok", metadata: {} } })
 
 // 1. first failure: plain error
-check(!/STOP:|KONIEC PRÓB/.test(noChange("b1", "a")), "1st no-change: no STOP expected")
+check(!/STOP:|NO MORE ATTEMPTS/.test(noChange("b1", "a")), "1st no-change: no STOP expected")
 // 2. second failure (different oldString — LOOP-STOP would not catch it): STOP appended
 let m = noChange("b1", "b")
 check(/STOP:/.test(m) && /read/.test(m), "2nd no-change: STOP with read advice expected, got " + m.slice(0, 200))
 // 3. sessions are independent
-check(!/STOP:|KONIEC PRÓB/.test(noChange("b2")), "other session: no STOP")
+check(!/STOP:|NO MORE ATTEMPTS/.test(noChange("b2")), "other session: no STOP")
 // 4. successful edit resets the count
 okEdit("b3"); noChange("b3"); okEdit("b3")
-check(!/STOP:|KONIEC PRÓB/.test(noChange("b3")), "after successful edit: count reset")
-// 5. repeated STOPs escalate to "KONIEC PRÓB"
+check(!/STOP:|NO MORE ATTEMPTS/.test(noChange("b3")), "after successful edit: count reset")
+// 5. repeated STOPs escalate to "NO MORE ATTEMPTS"
 let last = ""
 for (let i = 0; i < 6; i++) last = noChange("b4", "s" + i)
-check(/KONIEC PRÓB/.test(last), "escalation expected after many STOPs, got " + last.slice(0, 200))
+check(/NO MORE ATTEMPTS/.test(last), "escalation expected after many STOPs, got " + last.slice(0, 200))
 console.log(fails ? `FAILED: ${fails}` : "ALL OK")
 process.exit(fails ? 1 : 0)
