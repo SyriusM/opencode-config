@@ -35,6 +35,8 @@ check(nearMisses(MISSP, new Map([[CORRECT, 1]])).length === 0,
 
 // ---- isSilentChainFailure ----
 check(isSilentChainFailure("cd x && ls", 2, ""), "silent chain: exit 2 empty msg -> true")
+check(isSilentChainFailure("cd x && ls", 2, "(no output) Exited with code 2"), "silent chain: real opencode 2.x empty output -> true")
+check(!isSilentChainFailure("cd x && ls", 2, "(no output) ls: cannot access 'x' Exited with code 2"), "silent chain: real error text kept -> false")
 check(!isSilentChainFailure("cd x && ls", 1, ""), "silent chain: exit 1 -> false")
 check(!isSilentChainFailure("cd x && ls", 0, ""), "silent chain: exit 0 -> false")
 check(!isSilentChainFailure("cd x && ls", 124, ""), "silent chain: exit 124 -> false")
@@ -62,6 +64,6 @@ check(similarNameHint("write", { filePath: dir + "/B.txt", content: MISSP + "()"
 rmSync(dir, { recursive: true })
 check(projectRoot(dir) === undefined, "similarNameHint: fake dir removed -> no root left")
 
-const N = 22
+const N = 24
 console.log(fails ? `${fails} FAIL` : "similar-name: " + N + " checks OK")
 process.exit(fails ? 1 : 0)

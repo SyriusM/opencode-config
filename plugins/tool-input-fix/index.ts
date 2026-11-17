@@ -516,7 +516,8 @@ export function isMissingTarget(cmd: string, msg: string): boolean {
 // łańcuch && + pusty wynik + kod błędu ≠ 0/1/124 = ciche niepowodzenie (np. brak pliku lub 2>/dev/null);
 // wyjątek exit 3 + systemctl = normalne „inactive” (nie jest cichym niepowodzeniem)
 export function isSilentChainFailure(cmd: string, exit: unknown, msg: string): boolean {
-  return !msg.trim()
+  const bare = msg.replace(/\(no output\)/g, "").replace(/Exited with code -?\d+/g, "").trim()
+  return !bare
     && typeof exit === "number"
     && exit !== 0 && exit !== 1 && exit !== 124
     && / && /.test(cmd)
