@@ -39,12 +39,27 @@ const BACKEND_PORTS = [8116, 8086, 8120, 8094, 8096, 8098]
 type Speed = { phase: "GEN" | "PROMPT"; tps: number; done: number; total?: number }
 const [speed, setSpeed] = createSignal<Speed | null>(null)
 const [lastSpeed, setLastSpeed] = createSignal<Speed | null>(null)
+// Ports where llama-server itself listens (manual/test servers outside the proxy setup).
+// Proxy sockets belong to systemd, so they never match and are never woken.
+let extraPorts: number[] = []
+async function sampleLlamaPorts(): Promise<void> {
+  const out = await run("ss -ltnpH")
+  if (out == null) return
+  const ports = new Set<number>()
+  for (const line of out.split("\n")) {
+    if (!line.includes('"llama-server"')) continue
+    const m = line.match(/127\.0\.0\.1:(\d+)|\*:(\d+)|0\.0\.0\.0:(\d+)/)
+    const port = Number(m?.[1] ?? m?.[2] ?? m?.[3])
+    if (Number.isFinite(port) && !BACKEND_PORTS.includes(port) && port !== 8089) ports.add(port) // 8089 = bge-m3 embeddings
+  }
+  extraPorts = [...ports]
+}
 const prevSlot = new Map<number, { t: number; task: number; prompt: number; decoded: number }>()
 
 async function pollSpeed() {
   let current: Speed | null = null
   await Promise.all(
-    BACKEND_PORTS.map(async (port) => {
+    [...BACKEND_PORTS, ...extraPorts].map(async (port) => {
       let slot: any
       try {
         const res = await fetch(`http://127.0.0.1:${port}/slots`, { signal: AbortSignal.timeout(400) })
@@ -134,7 +149,8 @@ async function sampleModel(): Promise<string | null> {
     .split("\n")
     .map((line) => MODEL_UNITS[line.split(/\s+/)[0] ?? ""])
     .filter(Boolean)
-  return names.length > 0 ? names.join(", ") : null
+  if (names.length > 0) return names.join(", ")
+  return extraPorts.length > 0 ? `llama-server :${extraPorts.join(", :")} (manual)` : null
 }
 
 function startMetering() {
@@ -145,7 +161,10 @@ function startMetering() {
     lastSampleAt = now
     setNow(now)
 
-    if (ticks++ % MODEL_EVERY_N_TICKS === 0) setModel(await sampleModel())
+    if (ticks++ % MODEL_EVERY_N_TICKS === 0) {
+      await sampleLlamaPorts()
+      setModel(await sampleModel())
+    }
 
     const sample = await sampleGpu()
     setGpu(sample)
