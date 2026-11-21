@@ -68,6 +68,11 @@ async function pollSpeed() {
         prevSlot.delete(port)
         return
       }
+      // a loading server answers {"error":…} (no [0]) — this threw "slot.id_task" in the log every second
+      if (!slot || typeof slot !== "object") {
+        prevSlot.delete(port)
+        return
+      }
       const t = Date.now()
       const cur = {
         t,

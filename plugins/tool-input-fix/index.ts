@@ -391,7 +391,42 @@ const similarLines = (path: unknown, oldString: unknown): string | undefined => 
   if (i < 0) return `HINT: the line "${needle.slice(0, 120)}" is not in the file even ignoring indentation — read the file with the read tool and copy the fragment exactly.`
   const n = oldString.split("\n").length
   const fragment = lines.slice(i, i + Math.min(n, 8)).join("\n")
-  return `HINT: in the file (line ${i + 1}) this fragment looks exactly like this — copy it with this indentation as oldString:\n${fragment.slice(0, 1500)}`
+  return `HINT: in the file (line ${i + 1}) this fragment looks exactly like this — copy it with this indentation as oldString:\n${fragment.slice(0, 1500)}` +
+    (invisibleWsNote(fragment.slice(0, 1500), i + 1) ?? "")
+}
+
+// 11-21 (db 10-20..11-21): after the exact-fragment HINT models still failed when the fragment had characters
+// they cannot see — TAB after spaces in indentation, trailing spaces/TABs, NBSP (task 30, Qwen/Laguna/Bonsai:
+// "4 spaces + TAB" retyped as "5 spaces + TAB", NBSP dropped). Name them line by line.
+const SPECIAL_SPACES: Record<string, string> = {
+  " ": "NBSP (U+00A0)", " ": "narrow NBSP (U+202F)", " ": "thin space (U+2009)",
+  "​": "zero-width space (U+200B)", "　": "ideographic space (U+3000)", "﻿": "BOM (U+FEFF)",
+}
+const wsRuns = (s: string): string => {
+  const parts: string[] = []
+  for (const m of s.matchAll(/( +|\t+)/g)) {
+    const k = m[0].length, tab = m[0][0] === "\t"
+    parts.push(`${k} ${tab ? (k > 1 ? "TABs" : "TAB") : k > 1 ? "spaces" : "space"}`)
+  }
+  return parts.join(" + ")
+}
+export const invisibleWsNote = (fragment: string, firstLine: number): string | undefined => {
+  const notes: string[] = []
+  fragment.split("\n").forEach((l, k) => {
+    const what: string[] = []
+    const indent = l.match(/^[ \t]*/)![0]
+    if (indent.includes(" ") && indent.includes("\t")) what.push(`indentation = ${wsRuns(indent)}`)
+    const trail = l.trim() ? l.match(/[ \t]+$/)?.[0] : undefined
+    if (trail) what.push(`ends with ${wsRuns(trail)}`)
+    for (const [ch, name] of Object.entries(SPECIAL_SPACES)) {
+      const at = l.indexOf(ch)
+      if (at >= 0) what.push(`${name} after "${l.slice(0, at).trimStart().split(/[ \t]+/).slice(-3).join(" ")}"`)
+    }
+    if (what.length) notes.push(`- line ${firstLine + k}: ${what.join("; ")}`)
+  })
+  if (!notes.length) return
+  return `\nINVISIBLE CHARACTERS in this fragment (copy them exactly — or make oldString shorter so it does not ` +
+    `start or end on these spots):\n${notes.slice(0, 8).join("\n")}`
 }
 
 // After "Found N matches": showing just the line (similarLines) made the model copy the same non-unique fragment
