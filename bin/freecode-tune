@@ -375,9 +375,29 @@ def running_matches(args):
         got = open(f"/proc/{pid}/cmdline", "rb").read().decode().split("\0")[:-1]
     except (OSError, ValueError):
         return True   # cannot check (e.g. tests) — do not block
-    want = [re.sub(r'^"(.*)"$|^\'(.*)\'$', lambda m: m.group(1) or m.group(2) or "", a)
-            .replace("%h", os.path.expanduser("~")).replace("$$", "$") for a in args]
+    want = [systemd_unquote(a).replace("%h", os.path.expanduser("~")).replace("$$", "$") for a in args]
     return got == want
+
+
+def systemd_unquote(tok):
+    """A verbatim ExecStart= token → the argument the process gets: quotes removed, backslash escapes
+    resolved (11-21: `"{\\"preserve_thinking\\":true}"` and `token_embd\\\\.weight` never matched, so bench refused)."""
+    out, quote, i = "", None, 0
+    while i < len(tok):
+        c = tok[i]
+        if c == "\\" and i + 1 < len(tok):
+            out += {"n": "\n", "t": "\t"}.get(tok[i + 1], tok[i + 1]); i += 2; continue
+        if quote:
+            if c == quote:
+                quote = None
+            else:
+                out += c
+        elif c in "\"'":
+            quote = c
+        else:
+            out += c
+        i += 1
+    return out
 
 
 def wait_stopped():
@@ -601,6 +621,10 @@ def cmd_try(texts):
     ensure_no_drift()
     changes = [parse_change(t) for t in texts]
     good_args = state["good_args"]
+    if good_args != current_args():
+        # 11-21: a baseline from 10-22 (ctx 65536, no KV q4_0) was silently used as the base of a try
+        die(f"the baseline (GOOD) was measured on other flags than {UNIT} has now — "
+            f"first: freecode-tune -u {UNIT} bench", 5)
     prog, opts = to_options(good_args)
     new_args = from_options(prog, apply_changes(opts, changes))
     if new_args == good_args:

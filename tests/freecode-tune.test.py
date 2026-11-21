@@ -137,6 +137,21 @@ try:
 except SystemExit as e:
     ok(e.code == 1, "drop-in after tune.conf with ExecStart refused")
 
+# 11-21: verbatim ExecStart tokens → process argv (bench refused every server with an escaped JSON argument)
+ok(tune.systemd_unquote('"{\\"preserve_thinking\\":true}"') == '{"preserve_thinking":true}', "unquote escaped JSON")
+ok(tune.systemd_unquote('token_embd\\\\.weight=CUDA0') == 'token_embd\\.weight=CUDA0', "unquote backslash outside quotes")
+ok(tune.systemd_unquote('"Thinking budget reached, answering now."') == 'Thinking budget reached, answering now.', "unquote plain quotes")
+ok(tune.systemd_unquote("--x='a b'") == "--x=a b", "unquote partial single quotes")
+
+# 11-21: a baseline measured on other flags than the unit has now must not be the base of a try
+os.remove(os.path.join(d, "zz.conf"))
+tune.set_args(tune.base_args())
+tune.save_state({"good_args": tune.base_args()[:1] + ["-c", "1024"], "good": {"score": 1.0}})
+try:
+    tune.cmd_try(["ctx=32768"]); ok(False, "try refuses a stale baseline")
+except SystemExit as e:
+    ok(e.code == 5, f"try refuses a stale baseline (code {e.code})")
+
 # measurement formatting, verdict thresholds
 m = {"chat": 60.0, "code": 140.0, "prompt": 800.0, "prompt_tokens": 39000, "mem_stall_pct": 0.5, "score": 189.0}
 ok("chat 60.0" in tune.fmt(m) and "39000" in tune.fmt(m), "format")
