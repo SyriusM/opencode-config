@@ -40,6 +40,27 @@ export function isEmptyTurn(stepText: string, calls: number, finish: unknown): b
   return calls > 0 && finish !== "tool-calls" && finish !== "length" && finish !== "error" && stepText.trim() === ""
 }
 
+// 11-20: a step that only ANNOUNCES the next action and ends the turn (Gemma 4 Q5, astrology test:
+// "Teraz odczytam zawartość pliku…", "Wyślę komendę tail…" + finish=stop, no call — the user had to type "ok"
+// after every step). Acts in every mode, at most ANNOUNCE_MAX times per user prompt.
+const NOTE_ANNOUNCE =
+  "[no-call-guard] Your last reply only announced the next step but called no tool, so the task stalled. " +
+  "Do that step NOW with a real tool call (shell/read/edit), in this reply. " +
+  "If the task is already finished, give the final result instead (paste the required outputs literally)."
+export const ANNOUNCE_MAX = 6
+const ANNOUNCE_RE =
+  /\b(teraz|następnie|najpierw|potem|wyślę|uruchomię|odczytam|przeczytam|sprawdzę|wykonam|dopiszę|zapiszę|przejdę|zrobię|użyję|wprowadzę|poprawię|utworzę|skopiuję|now i will|next,? i('ll| will)|let me|i will now)\b/i
+// pure function — tested without opencode
+export function isAnnouncedStep(stepText: string, calls: number, finish: unknown): boolean {
+  if (calls === 0 || finish === "tool-calls" || finish === "length" || finish === "error") return false
+  const t = stepText.trim()
+  if (!t) return false
+  const tail = t.split(/\n\s*\n/).pop()!.slice(-300) // last paragraph
+  if (/\?\s*$/.test(tail)) return false // a question to the user — let them answer
+  if (/exit=\d|```\s*$/.test(tail)) return false // ends with results
+  return ANNOUNCE_RE.test(tail)
+}
+
 // 10-28: the command from a call written as text, quoted back so the model only has to re-send it as a real
 // call (the plugin can't run tools itself, and running them here would skip danger-guard and permissions)
 const CMD_PATTERNS = [
@@ -155,7 +176,7 @@ function log(line: string) {
   }
 }
 
-type State = { calls: number; text: string; stepText: string; user: string; fired: boolean; emptyFired: boolean }
+type State = { calls: number; text: string; stepText: string; user: string; fired: boolean; emptyFired: boolean; announced?: number }
 
 export default {
   id: "no-call-guard",
@@ -183,6 +204,17 @@ export default {
       try {
         await ctx.session.synthetic({ sessionID, text: NOTE_EMPTY, description: "no-call-guard", delivery: "steer" })
         log(`synthetic sent ${sessionID} delivery=steer kind=empty`)
+      } catch (e) {
+        log(`synthetic error ${sessionID}: ${String(e)}`)
+      }
+    }
+    async function fireAnnounce(sessionID: string, s: State, stepText: string) {
+      s.announced = (s.announced ?? 0) + 1
+      if (s.announced > ANNOUNCE_MAX) return // no endless loop
+      log(`ANNOUNCE ${sessionID} n=${s.announced} text=${JSON.stringify(stepText.slice(-160))}`)
+      try {
+        await ctx.session.synthetic({ sessionID, text: NOTE_ANNOUNCE, description: "no-call-guard", delivery: "steer" })
+        log(`synthetic sent ${sessionID} delivery=steer kind=announce`)
       } catch (e) {
         log(`synthetic error ${sessionID}: ${String(e)}`)
       }
@@ -216,6 +248,7 @@ export default {
                 if (!s.user) log(`inbox without text, shape: ${JSON.stringify(item).slice(0, 300)}`)
                 s.fired = false
                 s.emptyFired = false
+                s.announced = 0
               }
               break
             }
@@ -238,6 +271,7 @@ export default {
               s.stepText = ""
               if (d.finish === "tool-calls") break
               if (isEmptyTurn(stepText, s.calls, d.finish)) await fireEmpty(sessionID, s)
+              else if (isAnnouncedStep(stepText, s.calls, d.finish)) await fireAnnounce(sessionID, s, stepText)
               else await fire(sessionID, s, "steer", stepText)
               break
             }
