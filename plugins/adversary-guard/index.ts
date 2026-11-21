@@ -87,6 +87,15 @@ Answer with ONE line: "ALLOW" or "BLOCK: <short reason>". Nothing else.`
 
 type S = { task: string; last: string; model?: { providerID: string; modelID: string } }
 
+export const BLOCKED_PATH = "/nonexistent/adversary-guard-blocked"
+// pure: which input field holds the file path of a read/edit/write call (opencode 2.x: `path`; older: `filePath`)
+export function blockedPathKey(input: any): "path" | "filePath" | undefined {
+  if (typeof input?.path === "string") return "path"
+  if (typeof input?.filePath === "string") return "filePath"
+  return undefined
+}
+const pendingKey = (sessionID: string, tool: string) => sessionID + "\u0001" + tool
+
 export default {
   id: "adversary-guard",
   async setup(ctx: any) {
@@ -101,6 +110,8 @@ export default {
       if (!s) states.set(id, (s = { task: "", last: "" }))
       return s
     }
+    // sessionID+tool → block reason, delivered by the after hook (calls in a session run one by one)
+    const pending: Map<string, string> = (g.__adversaryPending ??= new Map())
     const controller = new AbortController()
 
     // user prompts: the first = the task, the last = the newest message
@@ -170,9 +181,35 @@ export default {
         if (tool === "execute") ev.input = { ...ev.input, code: `throw new Error(${JSON.stringify(text)})` }
         else if (typeof ev.input.command === "string")
           ev.input = { ...ev.input, command: `printf '%s\\n' ${JSON.stringify(text).replace(/[`$]/g, "")} >&2; exit 1` }
-        else ev.input = { ...ev.input, filePath: "/nonexistent/adversary-guard-blocked", __blocked: text }
+        else {
+          // read/edit/write cannot be stopped from the before hook: point the call at a path that fails,
+          // then the after hook puts the reason in place of the error (11-21: the old code set `filePath`,
+          // opencode 2.1.1 edit/write use `path` — blocked edits ran anyway, the model never saw the reason)
+          const key = blockedPathKey(ev.input)
+          if (!key) {
+            log(`CANNOT-BLOCK ${tool} (no path/filePath/command) — let through`)
+            return
+          }
+          if (pending.size > 200) pending.clear()
+          pending.set(pendingKey(String(ev.sessionID ?? ""), tool), text)
+          ev.input = { ...ev.input, [key]: BLOCKED_PATH }
+        }
       } catch (e) {
         log(`FAIL-OPEN ${tool}: ${e}`)
+      }
+    })
+
+    await ctx.tool.hook("execute.after", (ev: any) => {
+      try {
+        const k = pendingKey(String(ev.sessionID ?? ""), String(ev.tool ?? ""))
+        const text = pending.get(k)
+        if (!text) return
+        pending.delete(k)
+        // overwrite, not append: other plugins' hints about BLOCKED_PATH would only confuse the model
+        if (ev.error && typeof ev.error === "object") ev.error.message = text
+        else if (ev.result && typeof ev.result === "object") ev.result.output = text
+      } catch (e) {
+        log(`after FAIL ${e}`)
       }
     })
     log(`adversary-guard loaded (rules ${R === DEFAULT_RULES ? "default" : "adversary.md"}, providers ${Object.keys(P).length})`)
